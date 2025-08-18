@@ -4,8 +4,8 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { openai } from '@/lib/openai'
 import { extractTextFromPDF } from '@/lib/pdfUtils'
-import { readFile } from 'fs/promises'
 import { join } from 'path'
+import { PDFAnnotation } from '@/types'
 
 export async function GET(
   request: NextRequest,
@@ -75,8 +75,9 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params
   try {
     const session = await getServerSession(authOptions)
     
@@ -89,7 +90,7 @@ export async function POST(
     // Get document
     const document = await prisma.document.findFirst({
       where: {
-        id: params.id,
+        id: id,
         userId: session.user.id
       }
     })
@@ -101,7 +102,7 @@ export async function POST(
     // Get or create chat session
     let chatSession = await prisma.chatSession.findFirst({
       where: {
-        documentId: params.id,
+        documentId: id,
         userId: session.user.id
       }
     })
@@ -109,7 +110,7 @@ export async function POST(
     if (!chatSession) {
       chatSession = await prisma.chatSession.create({
         data: {
-          documentId: params.id,
+          documentId: id,
           userId: session.user.id
         }
       })
@@ -174,7 +175,7 @@ Respond naturally and helpfully to the student's question.`
 
     // Parse AI response for special commands
     let navigateToPage = null
-    let annotations: any[] = []
+    const annotations: PDFAnnotation[] = []
     let cleanResponse = aiResponse
 
     // Check for navigation command

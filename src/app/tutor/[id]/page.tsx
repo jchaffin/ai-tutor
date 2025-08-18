@@ -15,6 +15,7 @@ const PDFViewer = dynamic(() => import("@/components/pdf/PDFViewer"), {
 })
 import ChatInterface from '@/components/ChatInterface'
 import { TranscriptProvider } from '@/contexts/TranscriptContext'
+import { EventProvider } from '@/contexts/EventContext'
 
 interface Document {
   id: string
@@ -30,27 +31,14 @@ interface Message {
   timestamp: Date
 }
 
-interface Annotation {
-  id: string
-  page: number
-  x: number
-  y: number
-  width: number
-  height: number
-  type: 'highlight' | 'circle' | 'rectangle'
-  color: string
-  text?: string
-}
-
 export default function TutorPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
   const params = useParams()
   const documentId = typeof params.id === 'string' ? params.id : params.id?.[0] || ''
 
-  const [document, setDocument] = useState<Document | null>(null)
+  const [doc, setDoc] = useState<Document | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
-  const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [loading, setLoading] = useState(true)
   const [chatLoading, setChatLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
@@ -70,15 +58,72 @@ export default function TutorPage() {
     }
   }, [session, documentId])
 
+  // Listen for agent tool events
+  useEffect(() => {
+    const handlePageNavigation = (event: CustomEvent) => {
+      const { page, reason } = event.detail
+      console.log(`🧭 UI: Agent navigating to page ${page}: ${reason}`)
+      setCurrentPage(page)
+      
+      // Also forward to the viewer via zero-based event
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: Math.max(0, (page || 1) - 1) } }))
+      }
+    }
+
+    const handleAnnotationCreated = (event: CustomEvent) => {
+      const { annotation } = event.detail
+      console.log('📝 ANNOTATION CREATED:', annotation)
+      console.log('📝 ANNOTATION DETAILS:', {
+        page: annotation.page,
+        x: annotation.x,
+        y: annotation.y,
+        width: annotation.width,
+        height: annotation.height,
+        type: annotation.type,
+        color: annotation.color,
+        text: annotation.text
+      })
+    }
+
+    const handleClearAnnotations = () => {
+      console.log('🧹 Clearing all temporary annotations')
+    }
+
+    console.log('🎯 UI: Setting up event listeners')
+    window.addEventListener('tutor-page-navigation', handlePageNavigation as EventListener)
+    window.addEventListener('tutor-annotation-created', handleAnnotationCreated as EventListener)
+    window.addEventListener('tutor-annotations-clear', handleClearAnnotations as EventListener)
+    console.log('🎯 UI: Event listeners attached')
+
+    return () => {
+      window.removeEventListener('tutor-page-navigation', handlePageNavigation as EventListener)
+      window.removeEventListener('tutor-annotation-created', handleAnnotationCreated as EventListener)
+      window.removeEventListener('tutor-annotations-clear', handleClearAnnotations as EventListener)
+    }
+  }, [])
+
   const fetchDocument = async () => {
     try {
       const res = await fetch(`/api/documents/${documentId}`)
       if (res.ok) {
         const data = await res.json()
-        setDocument(data)
-        // For now, we'll use a placeholder for PDF content
-        // TODO: Implement proper PDF text extraction
-        setPdfContent(`Document: ${data.title}\nFilename: ${data.filename}\nThis is a PDF document that the student is viewing.`)
+        setDoc(data)
+        
+        // Extract PDF content for the agent
+        try {
+          const pdfRes = await fetch(`/api/documents/${documentId}/content`)
+          if (pdfRes.ok) {
+            const { content } = await pdfRes.json()
+            setPdfContent(content)
+          } else {
+            // Fallback to basic info
+            setPdfContent(`Document: ${data.title}\nFilename: ${data.filename}\nThis is a PDF document that the student is viewing.`)
+          }
+        } catch (error) {
+          console.error('Error extracting PDF content:', error)
+          setPdfContent(`Document: ${data.title}\nFilename: ${data.filename}\nThis is a PDF document that the student is viewing.`)
+        }
       } else if (res.status === 404) {
         setError('Document not found')
       } else {
@@ -98,7 +143,6 @@ export default function TutorPage() {
       if (res.ok) {
         const data = await res.json()
         setMessages(data.messages || [])
-        setAnnotations(data.annotations || [])
       }
     } catch (error) {
       console.error('Error fetching chat history:', error)
@@ -106,7 +150,7 @@ export default function TutorPage() {
   }
 
   const handleSendMessage = async (content: string) => {
-    if (!document) return
+    if (!doc) return
 
     // Add user message immediately
     const userMessage: Message = {
@@ -142,11 +186,6 @@ export default function TutorPage() {
         }
         setMessages(prev => [...prev, assistantMessage])
 
-        // Update annotations if provided
-        if (data.annotations && data.annotations.length > 0) {
-          setAnnotations(prev => [...prev, ...data.annotations])
-        }
-
         // Navigate to page if specified
         if (data.navigateToPage) {
           setCurrentPage(data.navigateToPage)
@@ -180,6 +219,18 @@ export default function TutorPage() {
     console.log('Voice input:', isRecording)
   }
 
+  const navigateToAnnotation = (index: number) => {
+    // This function is no longer needed as annotations are removed
+  }
+
+  const nextAnnotation = () => {
+    // This function is no longer needed as annotations are removed
+  }
+
+  const prevAnnotation = () => {
+    // This function is no longer needed as annotations are removed
+  }
+
   if (status === 'loading' || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -208,7 +259,7 @@ export default function TutorPage() {
     )
   }
 
-  if (!document) {
+  if (!doc) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-lg">Document not found</div>
@@ -228,8 +279,8 @@ export default function TutorPage() {
             ← Dashboard
           </Link>
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">{document.title}</h1>
-            <p className="text-sm text-gray-600">{document.filename}</p>
+            <h1 className="text-xl font-semibold text-gray-900">{doc.title}</h1>
+            <p className="text-sm text-gray-600">{doc.filename}</p>
           </div>
         </div>
         <div className="text-sm text-gray-600">
@@ -240,33 +291,32 @@ export default function TutorPage() {
       {/* Main Content - Split Screen */}
       <div className="flex-1 flex overflow-hidden">
         {/* PDF Viewer */}
-        <div className="w-1/2 border-r">
+        <div className="w-1/2 border-r relative">
+          {/* Annotation Navigation */}
+          {/* This section is no longer needed as annotations are removed */}
+          
           <PDFViewer
             fileUrl={`/api/files/${documentId}`}
-            annotations={annotations}
-            currentPage={currentPage}
             onPageChange={setCurrentPage}
+            currentPage={currentPage}
           />
         </div>
 
         {/* Chat Interface */}
         <div className="w-1/2">
-          <TranscriptProvider>
-            <ChatInterface
-              messages={messages}
-              onSendMessage={handleSendMessage}
-              isLoading={chatLoading}
-              pdfTitle={document.title}
-              pdfContent={pdfContent}
-              currentPage={currentPage}
-              onAnnotationCreated={(annotation) => {
-                setAnnotations(prev => [...prev, annotation])
-              }}
-              onPageNavigation={(page) => {
-                setCurrentPage(page)
-              }}
-            />
-          </TranscriptProvider>
+          <EventProvider>
+            <TranscriptProvider>
+              <ChatInterface
+                messages={messages}
+                onSendMessage={handleSendMessage}
+                isLoading={chatLoading}
+                pdfTitle={doc.title}
+                pdfContent={pdfContent}
+                currentPage={currentPage}
+                onPageNavigation={setCurrentPage}
+              />
+            </TranscriptProvider>
+          </EventProvider>
         </div>
       </div>
     </div>

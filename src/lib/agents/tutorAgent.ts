@@ -1,9 +1,35 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
 
 export const createTutorAgent = (pdfTitle: string, pdfContent: string): RealtimeAgent => {
+  console.log("🤖 Creating TutorAgent with:", { pdfTitle, pdfContentLength: pdfContent.length });
+  
   return new RealtimeAgent({
     name: 'ai_tutor',
     instructions: `You are an AI tutor helping a student understand a PDF document titled "${pdfTitle}".
+
+CRITICAL: You MUST respond in ENGLISH ONLY. Never use Spanish or any other language.
+
+IMPORTANT: You MUST respond with voice immediately when the session starts. Say "Hello! I'm your AI tutor. I'm here to help you understand this document, ${pdfTitle}. What would you like to know?"
+
+After saying hello, wait for user questions. 
+
+You are now a HIGHLY INTERACTIVE tutor that automatically highlights and navigates to relevant content as you speak. You MUST:
+
+1. **AUTOMATIC SECTION HIGHLIGHTING**: When you mention ANY section name, table, figure, or concept from the document, IMMEDIATELY highlight it using search_document or navigate_to_section.
+
+2. **CONTEXTUAL UI AWARENESS**: As you speak about specific content, continuously highlight the relevant text, tables, figures, or sections you're referencing.
+
+3. **SMART CONTENT DETECTION**: If you mention "baselines", "Table 1", "Figure 2", "Section 5.1", etc., automatically find and highlight that content.
+
+4. **REAL-TIME HIGHLIGHTING**: Your speech should be synchronized with visual highlights - as you talk about something, it should be highlighted on screen.
+
+5. **SECTION DETECTION**: If the user asks about ANYTHING that could be a section title (like "interhead gating", "baselines", "results", etc.), IMMEDIATELY use highlight_section_content to check if it's a section and highlight the entire section.
+
+Citation rules for EVERY answer:
+- Always refer to the document explicitly (say the page number).
+- Quote a short phrase from the PDF that supports your statement.
+- Prefer using the results returned by search_document (matches[].page and matches[].excerpt) for citations.
+- If no match is found, clearly say you couldn't find that term in the document and ask the user to rephrase.
 
 Your capabilities:
 1. Answer questions about the document content
@@ -11,13 +37,42 @@ Your capabilities:
 3. Navigate to specific pages when referencing content
 4. Highlight important text by creating visual annotations
 5. Engage in natural voice conversation
+6. **AUTOMATICALLY highlight relevant sections, tables, figures as you mention them**
 
 Document content:
-${pdfContent}
+${pdfContent.substring(0, 8000)}...
+
+CRITICAL: When the user asks about ANY topic, you MUST:
+1. **FIRST**: Check if the user is asking about a section by using highlight_section_content with their query
+2. **THEN**: Use search_document with a concise keyword/phrase from the question
+3. Jump to the first match and speak your explanation while that text is highlighted
+4. State the page number verbally as part of your answer
+5. Include a short quote (from the match excerpt) to back up your point
+6. **AUTOMATICALLY highlight any additional sections, tables, or content you mention in your response**
+
+EXAMPLE: If the user says "tell me about interhead gating", IMMEDIATELY:
+- Call highlight_section_content with "interhead gating" to check if it's a section title
+- If it IS a section, highlight the entire section and navigate to it
+- Then use search_document with "interhead gating" to highlight specific text matches
+- The viewer will highlight matches and jump to the first
+- As you speak about "baselines" or "Table 1", automatically highlight those too
+
+You MUST use highlight_section_content FIRST for every content question to check if it's a section title, then use search_document for specific text highlighting.
+Start your answer with something like: "On page {page}, it says, \"{short quote}\" ..."
+
+**NEW: AUTOMATIC SECTION DETECTION AND HIGHLIGHTING**
+- ALWAYS call highlight_section_content first when the user asks about ANY topic
+- If it's a section title, highlight the ENTIRE section and navigate to it
+- Then use search_document for specific text highlighting
+- Your speech should be a visual tour of the document with real-time highlighting
+
+Navigation commands:
+- If the user says anything like "go to page N", "page N", or "open page N", IMMEDIATELY call navigate_to_page with that page number.
+- Accept both digits and number words (e.g., "eight" → 8).
 
 When you want to navigate to a specific page, use the navigate_to_page tool.
 
-When you want to highlight or annotate something, use the create_annotation tool to create visual annotations on the PDF.
+When you want to highlight a phrase, prefer search_document so the actual words are highlighted. Only use create_annotation for explicit shapes upon request.
 
 Guidelines:
 - Be encouraging and supportive
@@ -26,10 +81,313 @@ Guidelines:
 - Use analogies and examples when helpful
 - Be conversational and natural in your responses
 - Always be accurate and cite the document when making claims
+- ALWAYS respond with voice output - never be silent
+- **CONTINUOUSLY highlight relevant content as you speak about it**
+- **ALWAYS check for sections first using highlight_section_content**
 
-Remember: You're having a voice conversation, so keep responses natural and spoken-friendly rather than overly formal or written-style.`,
+Remember: You're having a voice conversation, so keep responses natural and spoken-friendly rather than overly formal or written-style. You are now a VISUAL tutor that makes the document come alive with real-time highlighting. ALWAYS check if the user is asking about a section first!`,
     
     tools: [
+      tool({
+        name: 'search_document',
+        description: 'Search for specific terms or concepts in the PDF document',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'The term or concept to search for'
+            }
+          },
+          required: ['query'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          console.log("🔍 SEARCH TOOL CALLED:", input);
+          const { query } = input;
+          
+          // Request the viewer to perform search and return matches
+          const requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          let results: Array<{ page: number; pageIndex: number; matchIndex: number; startIndex: number; endIndex: number; excerpt: string }>
+            = [];
+
+          if (typeof window !== 'undefined') {
+            // Clear previous search marks and temporary annotations
+            window.dispatchEvent(new CustomEvent('pdf-clear-highlights'));
+            window.dispatchEvent(new CustomEvent('tutor-annotations-clear'));
+            const waitForResults = new Promise<void>((resolve) => {
+              const handler = (event: any) => {
+                if (event?.detail?.requestId === requestId) {
+                  results = event.detail.results || [];
+                  window.removeEventListener('pdf-search-results', handler as EventListener);
+                  resolve();
+                }
+              };
+              window.addEventListener('pdf-search-results', handler as EventListener, { once: true });
+            });
+
+            window.dispatchEvent(new CustomEvent('pdf-search-request', {
+              detail: { requestId, keywords: query }
+            }));
+
+            await waitForResults;
+
+            // AUTOMATIC SECTION DETECTION: If this looks like a section title, highlight the entire section
+            if (typeof window !== 'undefined' && (window as any).__pdfOutline) {
+              const outline: Array<{ title: string; pageIndex: number }> = (window as any).__pdfOutline || [];
+              const searchTerm = query.toLowerCase().trim();
+              
+              // Check if this query matches a section title
+              const sectionMatch = outline.find(s => 
+                s.title.toLowerCase().includes(searchTerm) ||
+                searchTerm.includes(s.title.toLowerCase()) ||
+                s.title.toLowerCase() === searchTerm
+              );
+              
+              if (sectionMatch) {
+                console.log(`🎯 AUTO-DETECTED SECTION: "${sectionMatch.title}" on page ${sectionMatch.pageIndex + 1}`);
+                // Navigate to the section
+                try {
+                  if ((window as any).pdfJumpToPage) {
+                    (window as any).pdfJumpToPage(sectionMatch.pageIndex + 1);
+                  } else {
+                    window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: sectionMatch.pageIndex } }));
+                  }
+                } catch {}
+                
+                // Highlight the entire section by searching for the section title text
+                const sectionRequestId = `section-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                window.dispatchEvent(new CustomEvent('pdf-search-request', {
+                  detail: { requestId: sectionRequestId, keywords: sectionMatch.title }
+                }));
+              }
+            }
+
+            // Build per-page first-match steps
+            // Choose first match per page in natural order using globalIndex when available
+            const pageToFirst = new Map<number, { pageIndex: number; matchIndex: number; globalIndex: number }>();
+            for (const r of results as any[]) {
+              const gi = typeof r.globalIndex === 'number' ? r.globalIndex : Number.MAX_SAFE_INTEGER;
+              if (!pageToFirst.has(r.pageIndex) || gi < (pageToFirst.get(r.pageIndex) as any).globalIndex) {
+                pageToFirst.set(r.pageIndex, { pageIndex: r.pageIndex, matchIndex: r.matchIndex, globalIndex: gi });
+              }
+            }
+            const steps = Array.from(pageToFirst.values()).sort((a, b) => a.globalIndex - b.globalIndex);
+
+            // Store search state globally for progressive navigation tied to speech
+            (window as any).__pdfSearchState = {
+              query,
+              results,
+              steps,
+              currentIndex: 0,
+              lastJumpMs: 0,
+            };
+            window.dispatchEvent(new CustomEvent('pdf-search-state', { detail: { query, results } }));
+
+            // Jump to the first match immediately and auto-advance while speaking
+            if (steps.length > 0) {
+              try {
+                const first = steps[0];
+                if ((window as any).pdfJumpToPage) (window as any).pdfJumpToPage(first.pageIndex + 1);
+                else window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: first.pageIndex } }));
+              } catch {}
+              window.dispatchEvent(new CustomEvent('pdf-jump-to', { detail: { index: steps[0].matchIndex } }));
+
+              // Auto-advance through next matches
+              const defaults = { intervalMs: 2500, maxSteps: 5 };
+              const cfg = (window as any).__pdfAutoAdvance ?? defaults;
+              const intervalMs = Math.max(750, Number(cfg.intervalMs) || defaults.intervalMs);
+              const maxSteps = Math.max(1, Math.min(Number(cfg.maxSteps) || defaults.maxSteps, steps.length));
+
+              const token = `adv-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+              (window as any).__pdfAutoAdvanceToken = token;
+
+              for (let i = 1; i < maxSteps; i++) {
+                setTimeout(() => {
+                  try {
+                    if ((window as any).__pdfAutoAdvanceToken !== token) return;
+                    const s = steps[i];
+                    if (!s) return;
+                    if ((window as any).pdfJumpToPage) (window as any).pdfJumpToPage(s.pageIndex + 1);
+                    else window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: s.pageIndex } }));
+                    window.dispatchEvent(new CustomEvent('pdf-jump-to', { detail: { index: s.matchIndex } }));
+                  } catch {}
+                }, i * intervalMs);
+              }
+            }
+          }
+
+          return {
+            success: true,
+            query,
+            matches: results,
+            message: results.length > 0
+              ? `Found ${results.length} matches for \"${query}\".`
+              : `No matches found for \"${query}\".`
+          };
+        }
+      }),
+
+      tool({
+        name: 'highlight_section_content',
+        description: 'Automatically detect if a term is a section title and highlight the entire section content',
+        parameters: {
+          type: 'object',
+          properties: {
+            term: {
+              type: 'string',
+              description: 'The term to check if it\'s a section title and highlight'
+            }
+          },
+          required: ['term'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          console.log("🎯 SECTION CONTENT HIGHLIGHT TOOL CALLED:", input);
+          const { term } = input;
+          
+          if (typeof window !== 'undefined' && (window as any).__pdfOutline) {
+            const outline: Array<{ title: string; pageIndex: number }> = (window as any).__pdfOutline || [];
+            const searchTerm = term.toLowerCase().trim();
+            
+            // Find exact or partial section matches
+            const sectionMatch = outline.find(s => 
+              s.title.toLowerCase().includes(searchTerm) ||
+              searchTerm.includes(s.title.toLowerCase()) ||
+              s.title.toLowerCase() === searchTerm
+            );
+            
+            if (sectionMatch) {
+              console.log(`🎯 HIGHLIGHTING ENTIRE SECTION: "${sectionMatch.title}" on page ${sectionMatch.pageIndex + 1}`);
+              
+              // Navigate to the section page
+              try {
+                if ((window as any).pdfJumpToPage) {
+                  (window as any).pdfJumpToPage(sectionMatch.pageIndex + 1);
+                } else {
+                  window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: sectionMatch.pageIndex } }));
+                }
+              } catch {}
+              
+              // Highlight the entire section by searching for the section title
+              const sectionRequestId = `section-highlight-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+              window.dispatchEvent(new CustomEvent('pdf-search-request', {
+                detail: { requestId: sectionRequestId, keywords: sectionMatch.title }
+              }));
+              
+              return {
+                success: true,
+                section: sectionMatch.title,
+                page: sectionMatch.pageIndex + 1,
+                message: `Highlighted entire section "${sectionMatch.title}" on page ${sectionMatch.pageIndex + 1}`
+              };
+            } else {
+              return {
+                success: false,
+                term,
+                message: `No section found matching "${term}". Try searching for the content instead.`
+              };
+            }
+          }
+          
+          return {
+            success: false,
+            term,
+            message: "PDF outline not available. Cannot detect sections."
+          };
+        }
+      }),
+
+      tool({
+        name: 'navigate_to_section',
+        description: 'Navigate to a specific section in the PDF document',
+        parameters: {
+          type: 'object',
+          properties: {
+            section: {
+              type: 'string',
+              description: 'The section title to navigate to (partial match is fine)'
+            }
+          },
+          required: ['section'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          console.log("📖 SECTION NAVIGATE TOOL CALLED:", input);
+          const { section } = input;
+          let targetPage = 1;
+
+          if (typeof window !== 'undefined') {
+            const outline: Array<{ title: string; pageIndex: number }> = (window as any).__pdfOutline || [];
+            if (outline.length > 0) {
+              const searchTerm = section.toLowerCase().trim();
+              // Try exact match first, then partial matches
+              let match = outline.find(s => 
+                s.title.toLowerCase() === searchTerm ||
+                s.title.toLowerCase().includes(searchTerm) || 
+                searchTerm.includes(s.title.toLowerCase())
+              );
+              
+              // If no match, try to find numbered sections (e.g., "5.1" should find "5" or "5.1")
+              if (!match && /\d/.test(searchTerm)) {
+                const numMatch = searchTerm.match(/(\d+(?:\.\d+)?)/);
+                if (numMatch) {
+                  const num = numMatch[1];
+                  match = outline.find(s => 
+                    s.title.includes(num) || 
+                    s.title.match(new RegExp(`\\b${num.replace('.', '\\.')}\\b`))
+                  );
+                }
+              }
+              
+              if (match) {
+                targetPage = match.pageIndex + 1;
+                console.log(`📖 Found section "${match.title}" on page ${targetPage}`);
+              }
+            }
+          }
+
+          try {
+            if ((window as any).pdfJumpToPage) {
+              (window as any).pdfJumpToPage(targetPage);
+            } else {
+              const zeroBased = Math.max(0, targetPage - 1);
+              window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: zeroBased } }));
+            }
+          } catch {}
+
+          return { 
+            success: true, 
+            section,
+            page: targetPage,
+            message: `Navigated to section "${section}" on page ${targetPage}` 
+          };
+        }
+      }),
+
+      tool({
+        name: 'get_page_count',
+        description: 'Return the total number of pages in the currently open PDF',
+        parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+        execute: async () => {
+          let numPages: number | undefined;
+          if (typeof window !== 'undefined') {
+            numPages = (window as any).__pdfNumPages;
+            if (numPages === undefined) {
+              const wait = new Promise<number>((resolve) => {
+                const handler = (ev: any) => {
+                  window.removeEventListener('pdf-doc-loaded', handler as EventListener);
+                  resolve(ev?.detail?.numPages ?? 0);
+                };
+                window.addEventListener('pdf-doc-loaded', handler as EventListener, { once: true });
+              });
+              numPages = await wait;
+            }
+          }
+          return { success: true, pages: numPages ?? 0 };
+        }
+      }),
+
       tool({
         name: 'navigate_to_page',
         description: 'Navigate to a specific page in the PDF document',
@@ -37,8 +395,8 @@ Remember: You're having a voice conversation, so keep responses natural and spok
           type: 'object',
           properties: {
             page: {
-              type: 'number',
-              description: 'The page number to navigate to'
+              type: ['number', 'string'],
+              description: 'The page number to navigate to (number or a number word like "eight")'
             },
             reason: {
               type: 'string',
@@ -49,13 +407,31 @@ Remember: You're having a voice conversation, so keep responses natural and spok
           additionalProperties: false
         },
         execute: async (input: any) => {
-          const { page, reason } = input;
-          
-          // Dispatch custom event for UI to handle page navigation
+          console.log("🧭 NAVIGATE TOOL CALLED:", input);
+          const { page: rawPage, reason } = input;
+
+          const numberWords: Record<string, number> = {
+            one: 1, two: 2, three: 3, four: 4, five: 5,
+            six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+            eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
+            sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20,
+          };
+
+          let page = typeof rawPage === 'number' ? rawPage : parseInt(String(rawPage).replace(/[^\w\s-]/g, '').match(/\d+/)?.[0] || '', 10);
+          if (!page || isNaN(page)) {
+            const word = String(rawPage).toLowerCase().trim();
+            page = numberWords[word] ?? 1;
+          }
+
           if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('tutor-page-navigation', {
-              detail: { page, reason }
-            }));
+            try {
+              if ((window as any).pdfJumpToPage) {
+                (window as any).pdfJumpToPage(page);
+          } else {
+                const zeroBased = Math.max(0, (page || 1) - 1);
+                window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: zeroBased } }));
+              }
+            } catch {}
           }
           
           return { 
@@ -111,6 +487,7 @@ Remember: You're having a voice conversation, so keep responses natural and spok
           additionalProperties: false
         },
         execute: async (input: any) => {
+          console.log("📝 ANNOTATION TOOL CALLED:", input);
           const { page, x, y, width, height, type, color = '#ffff00', text } = input;
           
           const annotation = {
@@ -125,8 +502,11 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             text
           };
           
+          console.log("📝 Creating annotation:", annotation);
+          
           // Dispatch custom event for UI to handle annotation creation
           if (typeof window !== 'undefined') {
+            console.log("📝 Dispatching annotation event");
             window.dispatchEvent(new CustomEvent('tutor-annotation-created', {
               detail: { annotation }
             }));

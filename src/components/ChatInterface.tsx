@@ -4,6 +4,7 @@ import React, { useRef, useState, useEffect, useMemo } from 'react'
 import { Send, Volume2, VolumeX, Mic } from 'lucide-react'
 import { useTranscript } from '@/contexts/TranscriptContext'
 import { useRealtimeSession } from '@/hooks/useRealtimeSession'
+import { useHandleSessionHistory } from '@/hooks/useHandleSessionHistory'
 import { createTutorAgent } from '@/lib/agents/tutorAgent'
 import { SessionStatus, PDFAnnotation } from '@/types'
 import ReactMarkdown from "react-markdown"
@@ -45,6 +46,9 @@ export default function ChatInterface({
 
   // Use transcript context for real-time message handling
   const { transcriptItems, clearTranscript } = useTranscript()
+  
+  // Use session history handler to process realtime events
+  const sessionHistoryHandler = useHandleSessionHistory()
 
   // Create audio element
   const sdkAudioElement = useMemo(() => {
@@ -83,6 +87,7 @@ export default function ChatInterface({
   // Initialize realtime session
   const { connect, disconnect, mute, sendEvent } = useRealtimeSession({
     onConnectionChange: (status) => {
+      console.log("🔗 Session status changed:", status);
       setSessionStatus(status as SessionStatus)
     },
   })
@@ -94,22 +99,30 @@ export default function ChatInterface({
 
   const fetchEphemeralKey = async (): Promise<string | null> => {
     try {
-      const response = await fetch('/api/realtime', {
+      const response = await fetch('/api/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-      })
+      });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
+        const errorData = await response.json().catch(() => ({}));
+        console.error(`Failed to get ephemeral key: ${response.status} ${response.statusText}`, errorData);
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const data = await response.json()
-      return data.client_secret?.value || null
+      const data = await response.json();
+      if (!data.ephemeralKey) {
+        console.error('No ephemeral key in response:', data);
+        throw new Error('No ephemeral key received from server');
+      }
+      
+      console.log('✅ Ephemeral key fetched successfully');
+      return data.ephemeralKey;
     } catch (error) {
-      console.error('Failed to fetch ephemeral key:', error)
-      return null
+      console.error('❌ Error fetching ephemeral key:', error);
+      return null;
     }
-  }
+  };
 
   const connectToRealtime = async () => {
     if (sessionStatus === "CONNECTED" || sessionStatus === "CONNECTING") {
@@ -118,13 +131,14 @@ export default function ChatInterface({
 
     try {
       clearTranscript()
-      console.log("Fetching ephemeral key...")
+      console.log("🔑 Fetching ephemeral key...")
       const ephemeralKey = await fetchEphemeralKey()
       if (!ephemeralKey) {
-        console.error("No ephemeral key received")
+        console.error("❌ Failed to get ephemeral key, cannot connect to voice")
+        setSessionStatus('DISCONNECTED')
         return
       }
-      console.log("Ephemeral key received successfully")
+      console.log("🔑 Ephemeral key received successfully")
 
       if (!audioElementRef.current) {
         console.error("Audio element not available")
@@ -140,30 +154,24 @@ export default function ChatInterface({
       
       await connect({
         getEphemeralKey: () => Promise.resolve(ephemeralKey),
-        initialAgent: tutorAgent,
+        initialAgents: [tutorAgent],
         audioElement: audioElementRef.current,
-        pdfContext: pdfContent,
-        currentPage
+        extraContext: {
+          pdfContext: pdfContent,
+          currentPage
+        },
+        outputGuardrails: []
       })
       
       console.log("✅ Voice connection successful")
       
-      // Trigger initial greeting with session update first
-      setTimeout(() => {
-        console.log("🎤 Setting up session for voice...");
-        sendEvent({
-          type: "session.update",
-          session: {
-            turn_detection: { type: "server_vad" },
-            voice: "alloy"
-          }
-        });
-      }, 1000);
-      
+      // Trigger initial greeting after connection is established
       setTimeout(() => {
         console.log("🎤 Triggering initial greeting");
-        sendEvent({ type: "response.create" });
-      }, 2000)
+        console.log("🎤 Session status:", sessionStatus);
+        console.log("🎤 Audio element:", audioElementRef.current);
+        updateSession(true);
+      }, 1000);
       
     } catch (error) {
       console.error("❌ Voice connection failed:", error)
@@ -178,6 +186,29 @@ export default function ChatInterface({
       console.error('Error disconnecting voice:', error)
     }
   }
+
+  const updateSession = (shouldTriggerResponse: boolean = false) => {
+    console.log("🔧 Updating session with shouldTriggerResponse:", shouldTriggerResponse);
+    console.log("🔧 Audio playback enabled:", isAudioPlaybackEnabled);
+    
+    // Use server-side voice activity detection for continuous listening
+    const turnDetection = { type: "server_vad" as const };
+
+    sendEvent({
+      type: "session.update",
+      session: {
+        turn_detection: turnDetection,
+        audio_playback: {
+          mode: isAudioPlaybackEnabled ? "enabled" : "disabled",
+        },
+      },
+    });
+
+    if (shouldTriggerResponse) {
+      console.log("🔧 Triggering response.create");
+      sendEvent({ type: "response.create" });
+    }
+  };
 
   const onToggleConnection = async () => {
     if (sessionStatus === "CONNECTED") {
@@ -236,24 +267,8 @@ export default function ChatInterface({
             <p className="text-sm text-gray-600">Ask questions about your PDF document</p>
           </div>
           <div className="flex items-center gap-3">
-            <div className={`w-3 h-3 rounded-full ${
-              sessionStatus === 'CONNECTED' ? 'bg-green-500' : 
-              sessionStatus === 'CONNECTING' ? 'bg-yellow-500' : 'bg-gray-400'
-            }`}></div>
-            <span className="text-sm text-gray-600">
-              {sessionStatus === 'CONNECTED' ? 'Voice Connected' : 
-               sessionStatus === 'CONNECTING' ? 'Connecting...' : 'Voice Disconnected'}
-            </span>
-            <button
-              onClick={onToggleConnection}
-              className={`text-xs font-medium transition-all duration-300 cursor-pointer ${
-                sessionStatus === 'CONNECTED' 
-                  ? 'text-red-500 hover:text-red-400' 
-                  : 'text-blue-500 hover:text-blue-400'
-              }`}
-            >
-              {sessionStatus === 'CONNECTED' ? 'Disconnect' : 'Connect'}
-            </button>
+            <div className="w-3 h-3 rounded-full bg-gray-400"></div>
+            <span className="text-sm text-gray-600">Voice Disconnected</span>
           </div>
         </div>
       </div>
@@ -264,7 +279,7 @@ export default function ChatInterface({
           <div className="text-center text-gray-500 mt-8">
             <div className="text-4xl mb-2">💬</div>
             <p>Start a conversation about your PDF!</p>
-            <p className="text-sm mt-1">Ask questions like "What is this document about?" or "Explain the main concepts"</p>
+            <p className="text-sm mt-1">Ask questions like &quot;What is this document about?&quot; or &quot;Explain the main concepts&quot;</p>
           </div>
         ) : (
           <>
@@ -364,6 +379,21 @@ export default function ChatInterface({
             />
           </div>
           
+          <button
+            type="button"
+            onClick={onToggleConnection}
+            className={`p-2 rounded-lg transition-colors ${
+              sessionStatus === 'CONNECTED'
+                ? 'bg-green-500 text-white hover:bg-green-600' 
+                : sessionStatus === 'CONNECTING'
+                ? 'bg-yellow-500 text-white'
+                : 'bg-blue-500 text-white hover:bg-blue-600'
+            }`}
+            title={sessionStatus === 'CONNECTED' ? 'Connected - Click to disconnect' : 'Connect voice'}
+          >
+            <Mic size={20} />
+          </button>
+
           <button
             type="button"
             onClick={() => setIsAudioPlaybackEnabled(!isAudioPlaybackEnabled)}
