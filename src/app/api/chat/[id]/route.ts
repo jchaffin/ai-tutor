@@ -101,7 +101,7 @@ export async function POST(
     // Get or create chat session
     let chatSession = await prisma.chatSession.findFirst({
       where: {
-        documentId: id,
+        documentId: params.id,
         userId: session.user.id
       }
     })
@@ -109,7 +109,7 @@ export async function POST(
     if (!chatSession) {
       chatSession = await prisma.chatSession.create({
         data: {
-          documentId: id,
+          documentId: params.id,
           userId: session.user.id
         }
       })

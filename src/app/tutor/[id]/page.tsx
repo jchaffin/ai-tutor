@@ -14,6 +14,7 @@ const PDFViewer = dynamic(() => import("@/components/pdf/PDFViewer"), {
   ),
 })
 import ChatInterface from '@/components/ChatInterface'
+import { TranscriptProvider } from '@/contexts/TranscriptContext'
 
 interface Document {
   id: string
@@ -54,6 +55,7 @@ export default function TutorPage() {
   const [chatLoading, setChatLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [error, setError] = useState<string | null>(null)
+  const [pdfContent, setPdfContent] = useState<string>('')
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -74,6 +76,9 @@ export default function TutorPage() {
       if (res.ok) {
         const data = await res.json()
         setDocument(data)
+        // For now, we'll use a placeholder for PDF content
+        // TODO: Implement proper PDF text extraction
+        setPdfContent(`Document: ${data.title}\nFilename: ${data.filename}\nThis is a PDF document that the student is viewing.`)
       } else if (res.status === 404) {
         setError('Document not found')
       } else {
@@ -246,12 +251,22 @@ export default function TutorPage() {
 
         {/* Chat Interface */}
         <div className="w-1/2">
-          <ChatInterface
-            messages={messages}
-            onSendMessage={handleSendMessage}
-            isLoading={chatLoading}
-            onVoiceInput={handleVoiceInput}
-          />
+          <TranscriptProvider>
+            <ChatInterface
+              messages={messages}
+              onSendMessage={handleSendMessage}
+              isLoading={chatLoading}
+              pdfTitle={document.title}
+              pdfContent={pdfContent}
+              currentPage={currentPage}
+              onAnnotationCreated={(annotation) => {
+                setAnnotations(prev => [...prev, annotation])
+              }}
+              onPageNavigation={(page) => {
+                setCurrentPage(page)
+              }}
+            />
+          </TranscriptProvider>
         </div>
       </div>
     </div>

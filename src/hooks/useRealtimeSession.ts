@@ -2,17 +2,15 @@ import { useCallback, useRef, useState, useEffect } from 'react';
 import {
   RealtimeSession,
   RealtimeAgent,
-  OpenAIRealtimeWebRTC,
+  OpenAIRealtimeWebSocket,
 } from '@openai/agents/realtime';
 
-import { audioFormatForCodec, applyCodecPreferences } from '../lib/codecUtils';
-import { SessionStatus, TutorMessage, PDFAnnotation } from '../types';
+import { audioFormatForCodec, applyCodecPreferences } from '@/lib/codecUtils';
+import { SessionStatus } from '@/types';
 
 export interface RealtimeSessionCallbacks {
   onConnectionChange?: (status: SessionStatus) => void;
-  onMessageReceived?: (message: TutorMessage) => void;
-  onAnnotationCreated?: (annotation: PDFAnnotation) => void;
-  onPageNavigation?: (page: number) => void;
+  onAgentHandoff?: (agentName: string) => void;
 }
 
 export interface ConnectOptions {
@@ -35,51 +33,20 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
     [callbacks],
   );
 
-  const codecParamRef = useRef<string>(
-    (typeof window !== 'undefined'
-      ? (new URLSearchParams(window.location.search).get('codec') ?? 'opus')
-      : 'opus')
-      .toLowerCase(),
-  );
-
-  // Wrapper to pass current codec param
-  const applyCodec = useCallback(
-    (pc: RTCPeerConnection) => applyCodecPreferences(pc, codecParamRef.current),
-    [],
-  );
-
   function handleTransportEvent(event: any) {
-    // Handle tutor-specific events
+    console.log("🚀 Transport event received:", event.type, event);
+    
     switch (event.type) {
       case "conversation.item.input_audio_transcription.completed": {
-        // Handle user speech transcription
-        const transcription = event.transcript;
-        if (transcription && callbacks.onMessageReceived) {
-          callbacks.onMessageReceived({
-            id: Date.now().toString(),
-            role: 'user',
-            content: transcription,
-            timestamp: new Date()
-          });
-        }
+        console.log("🎤 Transcription completed:", event);
         break;
       }
       case "response.audio_transcript.done": {
-        // Handle assistant response transcription
-        const transcription = event.transcript;
-        if (transcription && callbacks.onMessageReceived) {
-          callbacks.onMessageReceived({
-            id: Date.now().toString(),
-            role: 'assistant',
-            content: transcription,
-            timestamp: new Date()
-          });
-        }
+        console.log("🎵 Response transcript done:", event);
         break;
       }
       case "response.audio_transcript.delta": {
-        // Handle streaming assistant response
-        // Could be used for real-time transcript updates
+        console.log("🎵 Response transcript delta:", event);
         break;
       }
       default: {
@@ -89,17 +56,34 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
     }
   }
 
-  useEffect(() => {
-    if (sessionRef.current) {
-      // Log server errors
-      sessionRef.current.on("error", (...args: any[]) => {
-        console.error("Realtime session error:", args[0]);
-      });
+  const codecParamRef = useRef<string>(
+    (typeof window !== 'undefined'
+      ? (new URLSearchParams(window.location.search).get('codec') ?? 'opus')
+      : 'opus')
+      .toLowerCase(),
+  );
 
-      // additional transport events
-      sessionRef.current.on("transport_event", handleTransportEvent);
-    }
-  }, [sessionRef.current]);
+  const applyCodec = useCallback(
+    (pc: RTCPeerConnection) => applyCodecPreferences(pc, codecParamRef.current),
+    [],
+  );
+
+  // Setup event listeners
+  const setupEventListeners = (session: RealtimeSession) => {
+    const errorHandler = (...args: any[]) => {
+      try {
+        console.error("❌ Session error:", args[0]);
+        updateStatus('DISCONNECTED');
+      } catch (logError) {
+        console.error("❌ Error in error handler:", logError);
+      }
+    };
+
+    session.on("error", errorHandler);
+    session.on("transport_event", handleTransportEvent);
+
+    console.log("✅ Event listeners attached to session");
+  };
 
   const connect = useCallback(
     async ({
@@ -109,33 +93,27 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
       pdfContext,
       currentPage,
     }: ConnectOptions) => {
-      if (sessionRef.current) return; // already connected
+      if (sessionRef.current) return;
 
       updateStatus('CONNECTING');
 
       try {
         const ek = await getEphemeralKey();
-
-        // This lets you use the codec selector in the UI to force narrow-band (8 kHz) codecs to
-        //  simulate how the voice agent sounds over a PSTN/SIP phone call.
         const codecParam = codecParamRef.current;
         const audioFormat = audioFormatForCodec(codecParam);
 
         sessionRef.current = new RealtimeSession(initialAgent, {
-          transport: new OpenAIRealtimeWebRTC({
-            audioElement,
-            // Set preferred codec before offer creation
-            changePeerConnection: async (pc: RTCPeerConnection) => {
-              applyCodec(pc);
-              return pc;
-            },
+          transport: new OpenAIRealtimeWebSocket({
+            audioElement: audioElement,
+            apiKey: ek,
           }),
           model: 'gpt-4o-realtime-preview-2025-06-03',
           config: {
             inputAudioFormat: audioFormat,
             outputAudioFormat: audioFormat,
             inputAudioTranscription: {
-              model: 'gpt-4o-mini-transcribe',
+              model: 'gpt-4o-transcribe',
+              language: 'en',
             },
           },
           context: {
@@ -144,7 +122,11 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
           },
         });
 
-        await sessionRef.current.connect({ apiKey: ek });
+        console.log("🔗 Connecting session...");
+        await sessionRef.current.connect();
+        console.log("✅ Session connected successfully");
+        
+        setupEventListeners(sessionRef.current);
         updateStatus('CONNECTED');
       } catch (error) {
         console.error('Failed to connect to realtime session:', error);
@@ -154,17 +136,24 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
     [callbacks, updateStatus],
   );
 
-  const disconnect = useCallback(() => {
-    sessionRef.current?.close();
-    sessionRef.current = null;
-    updateStatus('DISCONNECTED');
+  const disconnect = useCallback(async () => {
+    if (sessionRef.current) {
+      try {
+        await sessionRef.current.close();
+      } catch (error) {
+        console.error('Error closing session:', error);
+      } finally {
+        sessionRef.current = null;
+        updateStatus('DISCONNECTED');
+      }
+    } else {
+      updateStatus('DISCONNECTED');
+    }
   }, [updateStatus]);
 
   const assertConnected = () => {
     if (!sessionRef.current) throw new Error('RealtimeSession not connected');
   };
-
-  /* ----------------------- message helpers ------------------------- */
 
   const interrupt = useCallback(() => {
     sessionRef.current?.interrupt();
@@ -176,8 +165,14 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
   }, []);
 
   const sendEvent = useCallback((ev: any) => {
-    sessionRef.current?.transport.sendEvent(ev);
-  }, []);
+    if (sessionRef.current && status === 'CONNECTED') {
+      try {
+        sessionRef.current.transport.sendEvent(ev);
+      } catch (error) {
+        console.warn('Failed to send event, session may not be ready:', error);
+      }
+    }
+  }, [status]);
 
   const mute = useCallback((m: boolean) => {
     sessionRef.current?.mute(m);
@@ -194,20 +189,6 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
     sessionRef.current.transport.sendEvent({ type: 'response.create' } as any);
   }, []);
 
-  const updatePDFContext = useCallback((pdfText: string, currentPage: number) => {
-    if (!sessionRef.current) return;
-    // Update the context with new PDF information
-    sessionRef.current.transport.sendEvent({
-      type: 'session.update',
-      session: {
-        context: {
-          pdfContext: pdfText,
-          currentPage: currentPage,
-        }
-      }
-    } as any);
-  }, []);
-
   return {
     status,
     connect,
@@ -218,6 +199,5 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
     pushToTalkStart,
     pushToTalkStop,
     interrupt,
-    updatePDFContext,
   } as const;
 }
