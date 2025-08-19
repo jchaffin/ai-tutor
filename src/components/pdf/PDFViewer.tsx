@@ -341,7 +341,14 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         }
         if (found) {
           console.log('✅ pdf-circle-text: found match on page', i + 1);
-          drawCircleOnPage(pageEl, found.rect);
+          const layerRect = pageEl.getBoundingClientRect();
+          const localRect = {
+            left: found.rect.left - layerRect.left,
+            top: found.rect.top - layerRect.top,
+            width: found.rect.width,
+            height: found.rect.height,
+          };
+          drawCircleOnPage(i, localRect);
           try { scrollToPageIndex(i); } catch {}
           return;
         }
