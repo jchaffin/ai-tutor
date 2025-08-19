@@ -68,7 +68,7 @@ export default function Dashboard() {
             <span className="text-gray-600">Welcome, {session?.user?.name || session?.user?.email}</span>
             <button
               onClick={() => signOut()}
-              className="text-gray-600 hover:text-gray-900 transition-colors"
+              className="text-gray-600 hover:text-gray-900 transition-colors cursor-pointer"
             >
               Sign Out
             </button>

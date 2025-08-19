@@ -105,9 +105,11 @@ export default function TutorPage() {
 
   const fetchDocument = async () => {
     try {
+      console.log("📄 Fetching document with ID:", documentId);
       const res = await fetch(`/api/documents/${documentId}`)
       if (res.ok) {
         const data = await res.json()
+        console.log("📄 Document data received:", data);
         setDoc(data)
         
         // Extract PDF content for the agent
@@ -115,14 +117,47 @@ export default function TutorPage() {
           const pdfRes = await fetch(`/api/documents/${documentId}/content`)
           if (pdfRes.ok) {
             const { content } = await pdfRes.json()
+            console.log("📄 PDF content extracted, length:", content?.length || 0);
+            
+            // Extract the actual title from PDF content
+            let extractedTitle = data.title; // fallback to database title
+            if (content && content.length > 0) {
+              // Look for title patterns in the first few lines of content
+              const lines = content.split('\n').slice(0, 20); // Check first 20 lines
+              for (const line of lines) {
+                const trimmedLine = line.trim();
+                // Look for lines that could be titles (not too long, starts with capital, not empty)
+                if (trimmedLine.length > 3 && 
+                    trimmedLine.length < 200 && 
+                    /^[A-Z]/.test(trimmedLine) && 
+                    !trimmedLine.includes('Abstract') &&
+                    !trimmedLine.includes('Introduction') &&
+                    !trimmedLine.includes('Table of Contents') &&
+                    !trimmedLine.includes('References') &&
+                    !trimmedLine.includes('Bibliography')) {
+                  extractedTitle = trimmedLine;
+                  console.log("📄 Extracted title from PDF content:", extractedTitle);
+                  break;
+                }
+              }
+            }
+            
+            // Update the document title with the extracted title
+            if (data) {
+              setDoc({ ...data, title: extractedTitle });
+            }
             setPdfContent(content)
           } else {
             // Fallback to basic info
-            setPdfContent(`Document: ${data.title}\nFilename: ${data.filename}\nThis is a PDF document that the student is viewing.`)
+            const fallbackContent = `Document: ${data.title}\nFilename: ${data.filename}\nThis is a PDF document that the student is viewing.`;
+            console.log("📄 Using fallback content:", fallbackContent);
+            setPdfContent(fallbackContent)
           }
         } catch (error) {
           console.error('Error extracting PDF content:', error)
-          setPdfContent(`Document: ${data.title}\nFilename: ${data.filename}\nThis is a PDF document that the student is viewing.`)
+          const fallbackContent = `Document: ${data.title}\nFilename: ${data.filename}\nThis is a PDF document that the student is viewing.`;
+          console.log("📄 Using fallback content due to error:", fallbackContent);
+          setPdfContent(fallbackContent)
         }
       } else if (res.status === 404) {
         setError('Document not found')
@@ -283,40 +318,53 @@ export default function TutorPage() {
             <p className="text-sm text-gray-600">{doc.filename}</p>
           </div>
         </div>
-        <div className="text-sm text-gray-600">
-          Welcome, {session?.user?.name || session?.user?.email}
+        <div className="flex items-center gap-3">
+          <div className="text-sm text-gray-600 hidden md:block">
+            Welcome, {session?.user?.name || session?.user?.email}
+          </div>
+          <button
+            onClick={() => router.back()}
+            className="px-4 py-2 bg-gray-500 text-white rounded-lg font-medium hover:bg-gray-600"
+            title="Back"
+          >
+            Back
+          </button>
         </div>
       </header>
 
-      {/* Main Content - Split Screen */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* PDF Viewer */}
-        <div className="w-1/2 border-r relative">
-          {/* Annotation Navigation */}
-          {/* This section is no longer needed as annotations are removed */}
-          
-          <PDFViewer
-            fileUrl={`/api/files/${documentId}`}
-            onPageChange={setCurrentPage}
-            currentPage={currentPage}
-          />
+      {/* Main Content - Completely Separated */}
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+        {/* PDF Viewer - Completely Independent Left Side */}
+        <div className="w-1/2 border-r flex flex-col min-h-0 overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-auto">
+            <PDFViewer
+              key="pdf-viewer-stable"
+              fileUrl={`/api/files/${documentId}`}
+              onPageChange={setCurrentPage}
+              currentPage={currentPage}
+            />
+          </div>
         </div>
-
-        {/* Chat Interface */}
-        <div className="w-1/2">
-          <EventProvider>
-            <TranscriptProvider>
-              <ChatInterface
-                messages={messages}
-                onSendMessage={handleSendMessage}
-                isLoading={chatLoading}
-                pdfTitle={doc.title}
-                pdfContent={pdfContent}
-                currentPage={currentPage}
-                onPageNavigation={setCurrentPage}
-              />
-            </TranscriptProvider>
-          </EventProvider>
+ 
+        {/* Chat Interface - Completely Independent Right Side */}
+        <div className="w-1/2 flex flex-col min-h-0 overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <EventProvider>
+              <TranscriptProvider>
+                <ChatInterface
+                  messages={messages}
+                  onSendMessage={handleSendMessage}
+                  isLoading={chatLoading}
+                  pdfTitle={doc.title}
+                  pdfContent={pdfContent}
+                  currentPage={currentPage}
+                  onPageNavigation={setCurrentPage}
+                  setMessages={setMessages}
+                  documentId={documentId}
+                />
+              </TranscriptProvider>
+            </EventProvider>
+          </div>
         </div>
       </div>
     </div>

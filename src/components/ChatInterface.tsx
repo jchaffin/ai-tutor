@@ -25,6 +25,8 @@ interface ChatInterfaceProps {
   pdfTitle?: string
   pdfContent?: string
   currentPage?: number
+  setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void
+  documentId: string
 }
 
 export default function ChatInterface({ 
@@ -35,20 +37,76 @@ export default function ChatInterface({
   isLoading = false,
   pdfTitle = '',
   pdfContent = '',
-  currentPage = 1
+  currentPage = 1,
+  setMessages,
+  documentId
 }: ChatInterfaceProps) {
   const [inputMessage, setInputMessage] = useState('')
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('DISCONNECTED')
   const [isAudioPlaybackEnabled, setIsAudioPlaybackEnabled] = useState(true)
+  const [showChatHistory, setShowChatHistory] = useState(false)
+  const [chatHistory, setChatHistory] = useState<Array<{id: string, timestamp: string, messageCount: number}>>([])
+  const [loadingHistory, setLoadingHistory] = useState(false)
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const audioElementRef = useRef<HTMLAudioElement | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [fixedInputStyle, setFixedInputStyle] = useState<React.CSSProperties>({})
+
+  // Keep fixed input aligned to chat pane width/position
+  useEffect(() => {
+    const update = () => {
+      const el = containerRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      setFixedInputStyle({ left: `${rect.left}px`, width: `${rect.width}px` })
+    }
+    update()
+    window.addEventListener('resize', update)
+    // capture scroll from ancestors too
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [])
 
   // Use transcript context for real-time message handling
   const { transcriptItems, clearTranscript } = useTranscript()
   
   // Use session history handler to process realtime events
   const sessionHistoryHandler = useHandleSessionHistory()
+
+  // Fetch chat history
+  const fetchChatHistory = async () => {
+    try {
+      setLoadingHistory(true);
+      const response = await fetch(`/api/chat/${documentId}/history`);
+      if (response.ok) {
+        const data = await response.json();
+        setChatHistory(data.chats || []);
+      }
+    } catch (error) {
+      console.error('Error fetching chat history:', error);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  // Load a specific chat
+  const loadChat = async (chatId: string) => {
+    try {
+      const response = await fetch(`/api/chat/${documentId}/history/${chatId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setMessages(data.messages || []);
+        setShowChatHistory(false); // Close sidebar after loading
+      }
+    } catch (error) {
+      console.error('Error loading chat:', error);
+    }
+  };
 
   // Create audio element
   const sdkAudioElement = useMemo(() => {
@@ -85,17 +143,34 @@ export default function ChatInterface({
   }, [sdkAudioElement])
 
   // Initialize realtime session
-  const { connect, disconnect, mute, sendEvent } = useRealtimeSession({
+  const { connect, disconnect, mute, sendEvent, sendUserText, interrupt } = useRealtimeSession({
     onConnectionChange: (status) => {
       console.log("🔗 Session status changed:", status);
       setSessionStatus(status as SessionStatus)
     },
   })
 
-  // Auto-scroll to bottom when new messages arrive
+  // No auto-scroll - let users control their own scroll position
+  // Users can scroll up to view history, new messages appear at bottom
+
+  // Monitor scroll position to show/hide scroll to bottom button
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, transcriptItems])
+    const messagesContainer = document.querySelector('.chat-messages') as HTMLElement;
+    if (!messagesContainer) return;
+
+    const handleScroll = () => {
+      const isNearBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 100;
+      setShowScrollToBottom(!isNearBottom);
+    };
+
+    messagesContainer.addEventListener('scroll', handleScroll);
+    return () => messagesContainer.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Function to scroll to bottom (manual control)
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
 
   const fetchEphemeralKey = async (): Promise<string | null> => {
     try {
@@ -150,7 +225,18 @@ export default function ChatInterface({
       audioElementRef.current.volume = 1.0
       console.log("🎵 Audio element ready for connection")
 
-      const tutorAgent = createTutorAgent(pdfTitle, pdfContent)
+      console.log("🤖 Creating tutor agent with:", {
+        pdfTitle: pdfTitle,
+        pdfContentLength: pdfContent?.length || 0,
+        pdfTitleType: typeof pdfTitle,
+        pdfTitleValue: pdfTitle
+      });
+
+      // Ensure we have a valid title
+      const safeTitle = pdfTitle && pdfTitle.trim() ? pdfTitle.trim() : 'PDF Document';
+      console.log("🤖 Using safe title:", safeTitle);
+
+      const tutorAgent = createTutorAgent(safeTitle, pdfContent)
       
       await connect({
         getEphemeralKey: () => Promise.resolve(ephemeralKey),
@@ -165,13 +251,12 @@ export default function ChatInterface({
       
       console.log("✅ Voice connection successful")
       
-      // Trigger initial greeting after connection is established
-      setTimeout(() => {
-        console.log("🎤 Triggering initial greeting");
-        console.log("🎤 Session status:", sessionStatus);
-        console.log("🎤 Audio element:", audioElementRef.current);
+      // Enable transcription immediately and trigger greeting
+      try {
         updateSession(true);
-      }, 1000);
+      } catch (error) {
+        console.error("❌ Failed to start transcription:", error);
+      }
       
     } catch (error) {
       console.error("❌ Voice connection failed:", error)
@@ -222,6 +307,17 @@ export default function ChatInterface({
     e.preventDefault()
     if (inputMessage.trim() && !isLoading) {
       onSendMessage(inputMessage.trim())
+      // If voice session is connected, forward the text into the conversation and trigger response
+      if (sessionStatus === 'CONNECTED') {
+        try {
+          // stop any ongoing assistant speech first
+          try { interrupt() } catch {}
+          sendUserText(inputMessage.trim())
+          sendEvent({ type: 'response.create' })
+        } catch (err) {
+          console.error('❌ Failed to send text to voice session:', err)
+        }
+      }
       setInputMessage('')
     }
   }
@@ -257,170 +353,286 @@ export default function ChatInterface({
     } catch {}
   }, [isAudioPlaybackEnabled, mute])
 
+  // Detect references like "Table 1" (optionally with a page mention) in assistant outputs
+  const lastProcessedMsgIdRef = useRef<string | null>(null)
+  const lastProcessedTranscriptIdRef = useRef<string | null>(null)
+
+  const wordsToNumber = (word: string): number | null => {
+    const map: Record<string, number> = {
+      one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+      eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20,
+      first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10
+    }
+    return map[word.toLowerCase()] ?? null
+  }
+
+  const extractPageNumber = (text: string): number | undefined => {
+    // Try explicit digits after "page"
+    const m1 = text.match(/page\s*(\d+)/i)
+    if (m1 && m1[1]) return parseInt(m1[1], 10)
+    // Try words like "page three" or ordinals like "third page"
+    const m2 = text.match(/page\s*([a-zA-Z]+)/i)
+    if (m2 && m2[1]) {
+      const n = wordsToNumber(m2[1])
+      if (n) return n
+    }
+    const m3 = text.match(/([a-zA-Z]+)\s*page/i)
+    if (m3 && m3[1]) {
+      const n = wordsToNumber(m3[1])
+      if (n) return n
+    }
+    return undefined
+  }
+
+  const maybeCircleTable = (text: string) => {
+    if (!text) return
+    const tableMatch = text.match(/table\s*(\d+)/i)
+    if (!tableMatch) return
+    const tableNum = tableMatch[1]
+    const pageNum = extractPageNumber(text)
+    try {
+      console.log('📤 Dispatching pdf-circle-text', { text: `Table ${tableNum}`, page: pageNum })
+      window.dispatchEvent(new CustomEvent('pdf-circle-text', { detail: { text: `Table ${tableNum}`, page: pageNum } }))
+    } catch (e) {
+      console.warn('Failed to dispatch pdf-circle-text event', e)
+    }
+  }
+
+  // Watch standard assistant messages
+  useEffect(() => {
+    if (!messages || messages.length === 0) return
+    const last = messages[messages.length - 1]
+    if (!last || last.role !== 'assistant') return
+    if (lastProcessedMsgIdRef.current === last.id) return
+    lastProcessedMsgIdRef.current = last.id
+    maybeCircleTable(last.content)
+  }, [messages])
+
+  // Watch real-time transcript assistant items
+  useEffect(() => {
+    if (!transcriptItems || transcriptItems.length === 0) return
+    const items = transcriptItems.filter((i) => i.type === 'MESSAGE' && !i.isHidden && i.role === 'assistant')
+    if (items.length === 0) return
+    const last = items[items.length - 1]
+    if (lastProcessedTranscriptIdRef.current === (last as any).itemId) return
+    lastProcessedTranscriptIdRef.current = (last as any).itemId
+    maybeCircleTable((last as any).title || '')
+  }, [transcriptItems])
+
   return (
-    <div className="flex flex-col h-full bg-white">
-      {/* Chat Header */}
-      <div className="p-4 bg-gray-50 border-b">
+    <div ref={containerRef} className="chat-interface-container h-full bg-white flex flex-col overflow-hidden relative">
+      {/* Header - GLUED TO TOP */}
+      <div className="chat-header bg-white border-b p-4 flex-shrink-0">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">AI Tutor Chat</h3>
+            <h2 className="text-xl font-semibold text-gray-800">AI Tutor Chat</h2>
             <p className="text-sm text-gray-600">Ask questions about your PDF document</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="w-3 h-3 rounded-full bg-gray-400"></div>
-            <span className="text-sm text-gray-600">Voice Disconnected</span>
           </div>
         </div>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 && transcriptItems.length === 0 ? (
-          <div className="text-center text-gray-500 mt-8">
-            <div className="text-4xl mb-2">💬</div>
-            <p>Start a conversation about your PDF!</p>
-            <p className="text-sm mt-1">Ask questions like &quot;What is this document about?&quot; or &quot;Explain the main concepts&quot;</p>
-          </div>
-        ) : (
-          <>
-            {/* Show persistent messages */}
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                    message.role === 'user'
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-gray-100 text-gray-900'
-                  }`}
-                >
-                  <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                    {message.content}
-                  </div>
-                  <div className={`text-xs mt-1 ${
-                    message.role === 'user' ? 'text-indigo-200' : 'text-gray-500'
-                  }`}>
-                    {formatTime(message.timestamp)}
-                  </div>
-                </div>
-              </div>
-            ))}
-            
-            {/* Show real-time transcript items */}
-            {transcriptItems
-              .filter(item => item.type === 'MESSAGE' && !item.isHidden)
-              .sort((a, b) => a.createdAtMs - b.createdAtMs)
-              .map((item) => {
-                const isUser = item.role === "user"
-                const title = item.title || ""
-                const displayTitle = title.startsWith("[") && title.endsWith("]") 
-                  ? title.slice(1, -1) 
-                  : title
+      {/* Connect Button */}
+      <div className="chat-connect bg-blue-50 border-b p-4 flex-shrink-0">
+        <div className="flex items-center justify-center gap-4">
+          <button
+            onClick={async () => {
+              try {
+                if (sessionStatus === 'CONNECTED') {
+                  await disconnectFromRealtime();
+                  return;
+                }
+                // Archive current chat to database if there are messages, then start a fresh session
+                if (messages.length > 0) {
+                  const response = await fetch('/api/chat/archive', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      documentId: documentId,
+                      messages: messages,
+                      timestamp: new Date().toISOString()
+                    }),
+                  });
+                  if (!response.ok && process.env.NODE_ENV !== 'production') {
+                    console.error('❌ Failed to archive chat');
+                  }
+                }
+                setMessages([]);
+                clearTranscript();
+                await connectToRealtime();
+              } catch (error) {
+                console.error('❌ Toggle connect error:', error);
+              }
+            }}
+            disabled={sessionStatus === 'CONNECTING'}
+            className={`px-6 py-3 rounded-lg font-medium ${
+              sessionStatus === 'CONNECTED'
+                ? 'bg-red-500 text-white hover:bg-red-600'
+                : sessionStatus === 'CONNECTING'
+                ? 'bg-yellow-500 text-white cursor-not-allowed'
+                : 'bg-blue-600 text-white hover:bg-blue-700'
+            }`}
+            title={sessionStatus === 'CONNECTED' ? 'Disconnect from AI tutor' : 'Start new chat and connect to AI tutor'}
+          >
+            {sessionStatus === 'CONNECTED' ? 'Disconnect' : sessionStatus === 'CONNECTING' ? 'Connecting…' : 'New Chat & Connect'}
+          </button>
 
-                return (
-                  <div key={item.itemId} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                      isUser 
-                        ? "bg-indigo-600 text-white" 
-                        : "bg-green-100 text-gray-900 border-l-4 border-green-500"
-                    }`}>
-                      <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                        <ReactMarkdown>{displayTitle}</ReactMarkdown>
-                      </div>
-                      <div className={`text-xs mt-1 flex items-center gap-2 ${
-                        isUser ? "text-indigo-200" : "text-gray-500"
-                      }`}>
-                        <span>{item.timestamp}</span>
-                        {item.status === 'IN_PROGRESS' && (
-                          <span className="text-blue-500">●</span>
-                        )}
-                        <span className="text-xs bg-green-200 text-green-800 px-1 rounded">
-                          Voice
-                        </span>
+          {/* Chat History Button */}
+          <button
+            onClick={() => {
+              setShowChatHistory(!showChatHistory);
+              if (!showChatHistory) {
+                fetchChatHistory();
+              }
+            }}
+            className={`px-4 py-3 rounded-lg font-medium ${
+              showChatHistory 
+                ? 'bg-blue-600 text-white' 
+                : 'bg-gray-500 text-white hover:bg-gray-600'
+            }`}
+            title="View chat history"
+          >
+            {showChatHistory ? 'Hide History' : 'Chat History'}
+          </button>
+        </div>
+        
+        <p className="text-center text-sm text-gray-600 mt-2">
+          {sessionStatus === 'CONNECTED' ? '✓ You can now speak with your AI tutor!' : 'Click to start a voice conversation'}
+        </p>
+      </div>
+
+      {/* Main Content Area with Chat History Sidebar */}
+      <div className="flex-1 flex min-h-0">
+        {/* Chat History Sidebar */}
+        {showChatHistory && (
+          <div className="w-64 border-r bg-gray-50 overflow-y-auto flex-shrink-0">
+            <div className="p-4 border-b bg-white">
+              <h3 className="font-semibold text-gray-900">Chat History</h3>
+              <p className="text-sm text-gray-600">Previous conversations</p>
+            </div>
+            <div className="p-2">
+              {loadingHistory ? (
+                <div className="text-center text-gray-500 py-4">Loading...</div>
+              ) : chatHistory.length === 0 ? (
+                <div className="text-center text-gray-500 py-4">No previous chats</div>
+              ) : (
+                chatHistory.map((chat) => (
+                  <div
+                    key={chat.id}
+                    onClick={() => loadChat(chat.id)}
+                    className="p-3 mb-2 bg-white rounded-lg border cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-colors"
+                  >
+                    <div className="text-sm font-medium text-gray-900">
+                      {new Date(chat.timestamp).toLocaleDateString()}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {new Date(chat.timestamp).toLocaleTimeString()}
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {chat.messageCount} messages
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Messages column */}
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className={`chat-messages flex-1 min-h-0 overflow-y-auto p-4 space-y-4 pb-36 ${showChatHistory ? '' : ''}`}>
+            {messages.length === 0 && transcriptItems.length === 0 ? (
+              <div className="text-center text-gray-500 mt-8">
+                <p>Start a conversation about your PDF!</p>
+              </div>
+            ) : (
+              <>
+                {messages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                        message.role === 'user'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-gray-100 text-gray-900'
+                      }`}
+                    >
+                      <div className="text-sm">{message.content}</div>
+                      <div className="text-xs mt-1 text-gray-500">
+                        {formatTime(message.timestamp)}
                       </div>
                     </div>
                   </div>
-                )
-              })}
-          </>
-        )}
-        
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="bg-gray-100 rounded-lg px-4 py-2">
-              <div className="flex items-center space-x-1">
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                ))}
+                
+                {transcriptItems
+                  .filter(item => item.type === 'MESSAGE' && !item.isHidden)
+                  .map((item) => {
+                    const isUser = item.role === "user"
+                    return (
+                      <div key={item.itemId} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+                        <div className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                          isUser 
+                            ? "bg-indigo-600 text-white" 
+                            : "bg-green-100 text-gray-900"
+                        }`}>
+                          <div className="text-sm">{item.title}</div>
+                          <div className="text-xs mt-1 text-gray-500">{item.timestamp}</div>
+                        </div>
+                      </div>
+                    )
+                  })}
+              </>
+            )}
+            
+            {isLoading && (
+              <div className="flex justify-start">
+                <div className="bg-gray-100 rounded-lg px-4 py-2">
+                  <div className="text-sm">Loading...</div>
+                </div>
               </div>
-            </div>
+            )}
+            
+            <div ref={messagesEndRef} />
           </div>
-        )}
-        
-        <div ref={messagesEndRef} />
-      </div>
 
-      {/* Input Form */}
-      <div className="p-4 border-t bg-gray-50">
-        <form onSubmit={handleSubmit} className="flex items-end gap-2">
-          <div className="flex-1">
-            <textarea
-              ref={inputRef}
-              value={inputMessage}
-              onChange={(e) => setInputMessage(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask a question about your PDF..."
-              className="w-full resize-none rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-              rows={1}
-              style={{ minHeight: '40px', maxHeight: '120px' }}
-              disabled={isLoading}
-            />
-          </div>
-          
-          <button
-            type="button"
-            onClick={onToggleConnection}
-            className={`p-2 rounded-lg transition-colors ${
-              sessionStatus === 'CONNECTED'
-                ? 'bg-green-500 text-white hover:bg-green-600' 
-                : sessionStatus === 'CONNECTING'
-                ? 'bg-yellow-500 text-white'
-                : 'bg-blue-500 text-white hover:bg-blue-600'
-            }`}
-            title={sessionStatus === 'CONNECTED' ? 'Connected - Click to disconnect' : 'Connect voice'}
-          >
-            <Mic size={20} />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setIsAudioPlaybackEnabled(!isAudioPlaybackEnabled)}
-            className={`p-2 rounded-lg transition-colors ${
-              isAudioPlaybackEnabled 
-                ? 'bg-green-500 text-white hover:bg-green-600' 
-                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-            }`}
-            title={isAudioPlaybackEnabled ? 'Mute audio' : 'Enable audio'}
-          >
-            {isAudioPlaybackEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
-          </button>
-
-          {sessionStatus === 'CONNECTED' && (
-            <div className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-lg text-xs">
-              <Mic size={14} />
-              <span>Listening</span>
+          {/* Scroll to Bottom Button */}
+          {showScrollToBottom && (
+            <div className="absolute bottom-36 right-4 z-20">
+              <button
+                onClick={scrollToBottom}
+                className="bg-indigo-600 text-white rounded-full p-3 shadow-lg hover:bg-indigo-700 transition-colors"
+                title="Scroll to latest messages"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                </svg>
+              </button>
             </div>
           )}
-          
+        </div>
+      </div>
+
+      {/* Input Form - FIXED, CONSTRAINED TO CHAT PANE */}
+      <div className="chat-input fixed bottom-0 bg-gray-50 border-t p-4 z-30" style={fixedInputStyle}>
+        <form onSubmit={handleSubmit} className="flex items-end gap-2">
+          <textarea
+            ref={inputRef}
+            value={inputMessage}
+            onChange={(e) => setInputMessage(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask a question about your PDF..."
+            className="flex-1 resize-none rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            rows={1}
+            disabled={isLoading}
+          />
           <button
             type="submit"
             disabled={!inputMessage.trim() || isLoading}
-            className="p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="Send message"
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
           >
-            <Send size={20} />
+            Send
           </button>
         </form>
       </div>

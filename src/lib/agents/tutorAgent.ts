@@ -15,7 +15,7 @@ After saying hello, wait for user questions.
 
 You are now a HIGHLY INTERACTIVE tutor that automatically highlights and navigates to relevant content as you speak. You MUST:
 
-1. **AUTOMATIC SECTION HIGHLIGHTING**: When you mention ANY section name, table, figure, or concept from the document, IMMEDIATELY highlight it using search_document or navigate_to_section.
+1. **AUTOMATIC SECTION HIGHLIGHTING**: When you mention ANY section name, table, figure, or concept from the document, IMMEDIATELY highlight it using Sument or navigate_to_section.
 
 2. **CONTEXTUAL UI AWARENESS**: As you speak about specific content, continuously highlight the relevant text, tables, figures, or sections you're referencing.
 
@@ -40,7 +40,7 @@ Your capabilities:
 6. **AUTOMATICALLY highlight relevant sections, tables, figures as you mention them**
 
 Document content:
-${pdfContent.substring(0, 8000)}...
+${pdfContent}
 
 CRITICAL: When the user asks about ANY topic, you MUST:
 1. **FIRST**: Check if the user is asking about a section by using highlight_section_content with their query
@@ -85,7 +85,7 @@ Guidelines:
 - **CONTINUOUSLY highlight relevant content as you speak about it**
 - **ALWAYS check for sections first using highlight_section_content**
 
-Remember: You're having a voice conversation, so keep responses natural and spoken-friendly rather than overly formal or written-style. You are now a VISUAL tutor that makes the document come alive with real-time highlighting. ALWAYS check if the user is asking about a section first!`,
+Remember: You're having a voice conversation, so keep responses natural and spoken-friendly rather than overly formal or written-style. You are now a VISUAL tutor that makes the document come alive with real-time highlighting. ALWAYS check if the user is asking about a section first! If unsure, call list_sections to see available sections, then navigate_to_section.`,
     
     tools: [
       tool({
@@ -126,8 +126,29 @@ Remember: You're having a voice conversation, so keep responses natural and spok
               window.addEventListener('pdf-search-results', handler as EventListener, { once: true });
             });
 
+            // Build robust keyword variants to highlight ALL occurrences across the doc
+            const q = String(query || '').trim();
+            const base = q.toLowerCase();
+            const variants = new Set<string>();
+            variants.add(base);
+            if (base.includes('-')) {
+              variants.add(base.replace(/-/g, ''));
+              variants.add(base.replace(/-/g, ' '));
+            } else {
+              // also add hyphenated
+              variants.add(base.replace(/\s+/g, '-'));
+            }
+            // Domain-specific expansions
+            if (/^mh\s*-?\s*ssm[s]?$/i.test(base) || /multi\s*head\s*state\s*space\s*model/i.test(base)) {
+              ['mh-ssm','mhssm','mh ssm','multi-head state space model','multi head state space model','multihead state space model'].forEach(v=>variants.add(v));
+            }
+            if (/^ssm[s]?$/i.test(base) || /state\s*space\s*model/i.test(base)) {
+              ['ssm','ssms','state space model','state space models'].forEach(v=>variants.add(v));
+            }
+            const keywordObjects = Array.from(variants).map((v) => ({ keyword: v, matchCase: false }));
+
             window.dispatchEvent(new CustomEvent('pdf-search-request', {
-              detail: { requestId, keywords: query }
+              detail: { requestId, keywords: keywordObjects }
             }));
 
             await waitForResults;
@@ -158,23 +179,23 @@ Remember: You're having a voice conversation, so keep responses natural and spok
                 // Highlight the entire section by searching for the section title text
                 const sectionRequestId = `section-${Date.now()}-${Math.random().toString(36).slice(2)}`;
                 window.dispatchEvent(new CustomEvent('pdf-search-request', {
-                  detail: { requestId: sectionRequestId, keywords: sectionMatch.title }
+                  detail: { requestId: sectionRequestId, keywords: [{ keyword: sectionMatch.title, matchCase: false }] }
                 }));
               }
             }
 
-            // Build per-page first-match steps
-            // Choose first match per page in natural order using globalIndex when available
+            // Build per-page first-match steps across ALL relevant pages
             const pageToFirst = new Map<number, { pageIndex: number; matchIndex: number; globalIndex: number }>();
-            for (const r of results as any[]) {
-              const gi = typeof r.globalIndex === 'number' ? r.globalIndex : Number.MAX_SAFE_INTEGER;
+            for (let i = 0; i < results.length; i++) {
+              const r: any = results[i];
+              const gi = typeof r.globalIndex === 'number' ? r.globalIndex : i;
               if (!pageToFirst.has(r.pageIndex) || gi < (pageToFirst.get(r.pageIndex) as any).globalIndex) {
                 pageToFirst.set(r.pageIndex, { pageIndex: r.pageIndex, matchIndex: r.matchIndex, globalIndex: gi });
               }
             }
             const steps = Array.from(pageToFirst.values()).sort((a, b) => a.globalIndex - b.globalIndex);
 
-            // Store search state globally for progressive navigation tied to speech
+            // Expose full search state for UI/agent summarization
             (window as any).__pdfSearchState = {
               query,
               results,
@@ -182,48 +203,61 @@ Remember: You're having a voice conversation, so keep responses natural and spok
               currentIndex: 0,
               lastJumpMs: 0,
             };
-            window.dispatchEvent(new CustomEvent('pdf-search-state', { detail: { query, results } }));
+            window.dispatchEvent(new CustomEvent('pdf-search-state', { detail: { query, results, steps } }));
 
-            // Jump to the first match immediately and auto-advance while speaking
+            // Jump to first relevant page
             if (steps.length > 0) {
               try {
                 const first = steps[0];
                 if ((window as any).pdfJumpToPage) (window as any).pdfJumpToPage(first.pageIndex + 1);
                 else window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: first.pageIndex } }));
               } catch {}
-              window.dispatchEvent(new CustomEvent('pdf-jump-to', { detail: { index: steps[0].matchIndex } }));
 
-              // Auto-advance through next matches
-              const defaults = { intervalMs: 2500, maxSteps: 5 };
+              // Auto-advance through ALL relevant pages while speaking
+              const defaults = { intervalMs: 3500, maxSteps: Number.POSITIVE_INFINITY, enabled: true } as any;
               const cfg = (window as any).__pdfAutoAdvance ?? defaults;
-              const intervalMs = Math.max(750, Number(cfg.intervalMs) || defaults.intervalMs);
-              const maxSteps = Math.max(1, Math.min(Number(cfg.maxSteps) || defaults.maxSteps, steps.length));
-
-              const token = `adv-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-              (window as any).__pdfAutoAdvanceToken = token;
-
-              for (let i = 1; i < maxSteps; i++) {
-                setTimeout(() => {
-                  try {
-                    if ((window as any).__pdfAutoAdvanceToken !== token) return;
-                    const s = steps[i];
-                    if (!s) return;
-                    if ((window as any).pdfJumpToPage) (window as any).pdfJumpToPage(s.pageIndex + 1);
-                    else window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: s.pageIndex } }));
-                    window.dispatchEvent(new CustomEvent('pdf-jump-to', { detail: { index: s.matchIndex } }));
-                  } catch {}
-                }, i * intervalMs);
+              const enabled = cfg.enabled !== false;
+              if (enabled) {
+                const intervalMs = Math.max(1200, Number(cfg.intervalMs) || defaults.intervalMs);
+                const maxSteps = Math.max(1, Math.min(Number(cfg.maxSteps) || steps.length, steps.length));
+                const token = `adv-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                (window as any).__pdfAutoAdvanceToken = token;
+                for (let i = 1; i < maxSteps; i++) {
+                  const stepIndex = i;
+                  setTimeout(() => {
+                    try {
+                      if ((window as any).__pdfAutoAdvanceToken !== token) return;
+                      const s = steps[stepIndex];
+                      if (!s) return;
+                      if ((window as any).pdfJumpToPage) (window as any).pdfJumpToPage(s.pageIndex + 1);
+                      else window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: s.pageIndex } }));
+                      // Avoid fragile jumpToMatch; highlights remain visible from prior search
+                    } catch {}
+                  }, i * intervalMs);
+                }
               }
             }
           }
+
+          // Aggregate for summarization and multi-citation
+          const pagesSet = new Set<number>();
+          const citations: Array<{ page: number; quote: string }> = [];
+          for (const r of results) {
+            pagesSet.add(r.page);
+            const quote = (r.excerpt || '').slice(0, 140);
+            if (quote) citations.push({ page: r.page, quote });
+          }
+          const pages = Array.from(pagesSet).sort((a, b) => a - b);
 
           return {
             success: true,
             query,
             matches: results,
+            pages,
+            citations: citations.slice(0, 12),
             message: results.length > 0
-              ? `Found ${results.length} matches for \"${query}\".`
-              : `No matches found for \"${query}\".`
+              ? `Found ${results.length} matches for "${query}" across pages ${pages.join(', ')}.`
+              : `No matches found for "${query}".`
           };
         }
       }),
@@ -272,14 +306,14 @@ Remember: You're having a voice conversation, so keep responses natural and spok
               // Highlight the entire section by searching for the section title
               const sectionRequestId = `section-highlight-${Date.now()}-${Math.random().toString(36).slice(2)}`;
               window.dispatchEvent(new CustomEvent('pdf-search-request', {
-                detail: { requestId: sectionRequestId, keywords: sectionMatch.title }
+                detail: { requestId: sectionRequestId, keywords: [{ keyword: term, matchCase: false }] }
               }));
               
               return {
                 success: true,
-                section: sectionMatch.title,
+                section: term,
                 page: sectionMatch.pageIndex + 1,
-                message: `Highlighted entire section "${sectionMatch.title}" on page ${sectionMatch.pageIndex + 1}`
+                message: `Highlighted entire section "${term}" on page ${sectionMatch.pageIndex + 1}`
               };
             } else {
               return {
@@ -295,6 +329,54 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             term,
             message: "PDF outline not available. Cannot detect sections."
           };
+        }
+      }),
+
+      tool({
+        name: 'circle_table',
+        description: 'Circle a table label by searching for its caption (e.g., "Table 1") and drawing a circle overlay around it',
+        parameters: {
+          type: 'object',
+          properties: {
+            label: { type: 'string', description: 'The table label to circle, e.g., "Table 1"' }
+          },
+          required: ['label'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          const label = String(input?.label || '').trim();
+          if (!label) {
+            return { success: false, message: 'Missing table label' };
+          }
+          if (typeof window !== 'undefined') {
+            try { window.dispatchEvent(new CustomEvent('tutor-annotations-clear')); } catch {}
+            window.dispatchEvent(new CustomEvent('tutor-circle-table', { detail: { label } }));
+            return { success: true, label, message: `Circling ${label}` };
+          }
+          return { success: false, label, message: 'Not in browser context' };
+        }
+      }),
+
+      tool({
+        name: 'circle_figure',
+        description: 'Circle a figure label by searching for its caption (e.g., "Figure 2") and drawing a circle overlay around it',
+        parameters: {
+          type: 'object',
+          properties: {
+            label: { type: 'string', description: 'The figure label to circle, e.g., "Figure 2"' }
+          },
+          required: ['label'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          const label = String(input?.label || '').trim();
+          if (!label) return { success: false, message: 'Missing figure label' };
+          if (typeof window !== 'undefined') {
+            try { window.dispatchEvent(new CustomEvent('tutor-annotations-clear')); } catch {}
+            window.dispatchEvent(new CustomEvent('tutor-circle-figure', { detail: { label } }));
+            return { success: true, label, message: `Circling ${label}` };
+          }
+          return { success: false, label, message: 'Not in browser context' };
         }
       }),
 
@@ -517,6 +599,56 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             annotation,
             message: `Created ${type} annotation on page ${page}${text ? `: ${text}` : ''}` 
           };
+        }
+      }),
+
+      tool({
+        name: 'list_sections',
+        description: 'Return the list of detected document sections (title and page) from the viewer',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+        execute: async () => {
+          if (typeof window !== 'undefined') {
+            const outline = (window as any).__pdfOutline || [];
+            return { success: true, sections: outline.map((s: any) => ({ title: s.title, page: s.pageIndex + 1 })) };
+          }
+          return { success: false, sections: [] };
+        }
+      }),
+
+      tool({
+        name: 'navigate_to_section',
+        description: 'Navigate to a section by number (e.g., 5.1) or title (e.g., Baselines). Also highlights the section title.',
+        parameters: {
+          type: 'object',
+          properties: { query: { type: 'string', description: 'Section number or title' } },
+          required: ['query'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          const qRaw = String(input?.query || '').trim();
+          if (!qRaw) return { success: false, message: 'Missing section query' };
+          if (typeof window === 'undefined') return { success: false, message: 'Not in browser context' };
+          const outline: Array<{ title: string; pageIndex: number }> = (window as any).__pdfOutline || [];
+          const q = qRaw.toLowerCase();
+          const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+          const numLike = q.match(/^\d+(?:\.\d+)*$/);
+          let match = null as any;
+          if (numLike) {
+            match = outline.find((s) => normalize(s.title).startsWith(q));
+          }
+          if (!match) {
+            match = outline.find((s) => normalize(s.title).includes(q) || q.includes(normalize(s.title)));
+          }
+          if (match) {
+            try { (window as any).pdfJumpToPage ? (window as any).pdfJumpToPage(match.pageIndex + 1) : window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: match.pageIndex } })); } catch {}
+            const requestId = `section-nav-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            window.dispatchEvent(new CustomEvent('pdf-search-request', { detail: { requestId, keywords: [{ keyword: match.title, matchCase: false }] } }));
+            return { success: true, page: match.pageIndex + 1, section: match.title };
+          }
+          // fallback: search for the query text directly
+          const requestId = `section-fallback-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          window.dispatchEvent(new CustomEvent('pdf-search-request', { detail: { requestId, keywords: [{ keyword: qRaw, matchCase: false }] } }));
+          return { success: false, message: 'Section not found in outline; highlighted search results instead.' };
         }
       })
     ]

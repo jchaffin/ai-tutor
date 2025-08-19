@@ -29,11 +29,18 @@ export async function GET(
       return NextResponse.json({ error: 'Document not found' }, { status: 404 })
     }
 
-    // Extract PDF text content
+    // Extract PDF text content and metadata
     const filePath = join(process.cwd(), document.filepath)
-    const content = await extractTextFromPDF(filePath)
+    const extractionResult = await extractTextFromPDF(filePath)
 
-    return NextResponse.json({ content })
+    return NextResponse.json({ 
+      content: extractionResult.text,
+      title: extractionResult.title,
+      author: extractionResult.author,
+      subject: extractionResult.subject,
+      keywords: extractionResult.keywords,
+      numPages: extractionResult.numPages
+    })
   } catch (error) {
     console.error('Error extracting PDF content:', error)
     return NextResponse.json(
