@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { openai } from '@/lib/openai'
-import { extractTextFromPDF } from '@/lib/pdfUtils'
-import { join } from 'path'
 import { PDFAnnotation } from '@/types'
 
 export async function GET(
@@ -77,6 +75,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  
   try {
     const session = await auth()
     
@@ -116,9 +115,21 @@ export async function POST(
       })
     }
 
-    // Extract PDF text for context
-    const filePath = join(process.cwd(), document.filepath)
-    const pdfText = await extractTextFromPDF(filePath)
+    // Fetch PDF content from the content API
+    const contentResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/documents/${id}/content`, {
+      headers: {
+        'Cookie': request.headers.get('cookie') || ''
+      }
+    })
+
+    if (!contentResponse.ok) {
+      const errorData = await contentResponse.json()
+      return NextResponse.json({ 
+        error: errorData.error || 'Failed to extract PDF content' 
+      }, { status: 500 })
+    }
+
+    const pdfContent = await contentResponse.json()
 
     // Get recent messages for context
     const recentMessages = await prisma.message.findMany({
@@ -148,7 +159,7 @@ Document title: ${document.title}
 Current page: ${currentPage}
 
 Document content:
-${pdfText}
+${pdfContent.content}
 
 Previous conversation:
 ${conversationHistory}
@@ -191,17 +202,35 @@ Respond naturally and helpfully to the student's question.`
     if (annotationMatches) {
       for (const match of annotationMatches) {
         try {
-          const annotationData = JSON.parse(match.replace('ANNOTATION:', '').trim())
-          annotations.push(annotationData)
-        } catch (e) {
-          console.error('Failed to parse annotation:', e)
+          const annotationJson = match.replace('ANNOTATION:', '').trim()
+          const annotation = JSON.parse(annotationJson)
+          
+          // Validate annotation data
+          if (annotation.page && annotation.x !== undefined && annotation.y !== undefined && 
+              annotation.width !== undefined && annotation.height !== undefined && annotation.type) {
+            annotations.push({
+              id: `temp-${Date.now()}-${Math.random()}`,
+              page: annotation.page,
+              x: annotation.x,
+              y: annotation.y,
+              width: annotation.width,
+              height: annotation.height,
+              type: annotation.type,
+              color: annotation.color || '#ffff00',
+              text: annotation.text || ''
+            })
+          }
+          
+          // Remove annotation command from response
+          cleanResponse = cleanResponse.replace(match, '').trim()
+        } catch (parseError) {
+          console.error('Error parsing annotation JSON:', parseError)
         }
       }
-      cleanResponse = cleanResponse.replace(/ANNOTATION:\s*\{[^}]+\}/g, '').trim()
     }
 
     // Save user message
-    const userMessage = await prisma.message.create({
+    await prisma.message.create({
       data: {
         chatSessionId: chatSession.id,
         role: 'user',
@@ -209,8 +238,8 @@ Respond naturally and helpfully to the student's question.`
       }
     })
 
-    // Save assistant message
-    const assistantMessage = await prisma.message.create({
+    // Save AI response
+    const aiMessage = await prisma.message.create({
       data: {
         chatSessionId: chatSession.id,
         role: 'assistant',
@@ -218,39 +247,32 @@ Respond naturally and helpfully to the student's question.`
       }
     })
 
-    // Save annotations
-    const savedAnnotations = []
-    for (const annotation of annotations) {
-      const savedAnnotation = await prisma.annotation.create({
-        data: {
-          messageId: assistantMessage.id,
-          page: annotation.page || currentPage,
-          x: annotation.x || 0,
-          y: annotation.y || 0,
-          width: annotation.width || 10,
-          height: annotation.height || 5,
-          type: annotation.type || 'highlight',
-          color: annotation.color || '#ffff00',
-          text: annotation.text
-        }
-      })
-      savedAnnotations.push({
-        id: savedAnnotation.id,
-        page: savedAnnotation.page,
-        x: savedAnnotation.x,
-        y: savedAnnotation.y,
-        width: savedAnnotation.width,
-        height: savedAnnotation.height,
-        type: savedAnnotation.type,
-        color: savedAnnotation.color,
-        text: savedAnnotation.text
-      })
+    // Save annotations if any
+    if (annotations.length > 0) {
+      for (const annotation of annotations) {
+        await prisma.annotation.create({
+          data: {
+            messageId: aiMessage.id,
+            page: annotation.page,
+            x: annotation.x,
+            y: annotation.y,
+            width: annotation.width,
+            height: annotation.height,
+            type: annotation.type,
+            color: annotation.color,
+            text: annotation.text
+          }
+        })
+      }
     }
 
     return NextResponse.json({
-      response: cleanResponse,
+      message: cleanResponse,
       navigateToPage,
-      annotations: savedAnnotations
+      annotations: annotations.map(ann => ({
+        ...ann,
+        id: `temp-${Date.now()}-${Math.random()}`
+      }))
     })
   } catch (error) {
     console.error('Error processing chat message:', error)

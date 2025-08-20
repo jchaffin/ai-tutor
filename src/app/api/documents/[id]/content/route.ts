@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { extractTextFromPDF } from '@/lib/pdfUtils'
-import { join } from 'path'
 
 export async function GET(
   request: NextRequest,
@@ -16,10 +15,9 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Get document
     const document = await prisma.document.findFirst({
       where: {
-        id,
+        id: id,
         userId: session.user.id
       }
     })
@@ -28,22 +26,29 @@ export async function GET(
       return NextResponse.json({ error: 'Document not found' }, { status: 404 })
     }
 
-    // Extract PDF text content and metadata
-    const filePath = join(process.cwd(), document.filepath)
-    const extractionResult = await extractTextFromPDF(filePath)
+    // Extract text from PDF using the filepath (URL from Vercel Blob)
+    console.log('📄 Extracting text from document:', document.title, 'at:', document.filepath)
+    const pdfContent = await extractTextFromPDF(document.filepath)
 
-    return NextResponse.json({ 
-      content: extractionResult.text,
-      title: extractionResult.title,
-      author: extractionResult.author,
-      subject: extractionResult.subject,
-      keywords: extractionResult.keywords,
-      numPages: extractionResult.numPages
+    if (!pdfContent.text || pdfContent.text === 'Unable to extract text from PDF') {
+      return NextResponse.json({ 
+        error: 'Failed to extract text from PDF. The file might be corrupted or password-protected.' 
+      }, { status: 500 })
+    }
+
+    return NextResponse.json({
+      content: pdfContent.text,
+      title: pdfContent.title || document.title,
+      author: pdfContent.author,
+      subject: pdfContent.subject,
+      keywords: pdfContent.keywords,
+      numPages: pdfContent.numPages,
+      documentId: document.id
     })
   } catch (error) {
     console.error('Error extracting PDF content:', error)
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Failed to extract PDF content' },
       { status: 500 }
     )
   }

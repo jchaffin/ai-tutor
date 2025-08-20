@@ -12,8 +12,43 @@ export interface PDFExtractionResult {
 
 export async function extractTextFromPDF(filePath: string): Promise<PDFExtractionResult> {
   try {
-    const dataBuffer = await readFile(filePath)
+    let dataBuffer: Buffer
+    
+    // Check if it's a URL (Vercel Blob) or local file path
+    if (filePath.startsWith('http')) {
+      // Fetch from remote URL
+      console.log('📄 Fetching PDF from URL:', filePath)
+      const response = await fetch(filePath)
+      if (!response.ok) {
+        throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`)
+      }
+      const arrayBuffer = await response.arrayBuffer()
+      dataBuffer = Buffer.from(arrayBuffer)
+      console.log('📄 PDF fetched successfully, size:', dataBuffer.length, 'bytes')
+    } else {
+      // Read from local file
+      console.log('📄 Reading PDF from local path:', filePath)
+      dataBuffer = await readFile(filePath)
+      console.log('📄 PDF read successfully, size:', dataBuffer.length, 'bytes')
+    }
+    
+    // Validate buffer
+    if (!dataBuffer || dataBuffer.length === 0) {
+      throw new Error('PDF buffer is empty or invalid')
+    }
+    
+    // Check if it's actually a PDF by looking at the header
+    const header = dataBuffer.toString('ascii', 0, 8)
+    if (!header.startsWith('%PDF')) {
+      throw new Error(`File does not appear to be a valid PDF. Header: ${header}`)
+    }
+    
+    console.log('📄 PDF header validated:', header)
+    
+    // Parse the PDF
+    console.log('📄 Starting PDF parsing...')
     const data = await pdfParse(dataBuffer)
+    console.log('📄 PDF parsing completed successfully')
     
     // Extract metadata
     const result: PDFExtractionResult = {
@@ -51,14 +86,30 @@ export async function extractTextFromPDF(filePath: string): Promise<PDFExtractio
       textLength: result.text.length,
       title: result.title,
       author: result.author,
-      numPages: result.numPages
+      numPages: result.numPages,
+      hasText: !!result.text,
+      textPreview: result.text.substring(0, 100) + '...'
     });
     
     return result
   } catch (error) {
-    console.error('Error extracting text from PDF:', error)
+    console.error('❌ Error extracting text from PDF:', error)
+    
+    // Provide more specific error messages
+    if (error instanceof Error) {
+      if (error.message.includes('Failed to fetch')) {
+        console.error('❌ Network error - PDF URL may be invalid or inaccessible')
+      } else if (error.message.includes('PDF buffer is empty')) {
+        console.error('❌ PDF file is empty or corrupted')
+      } else if (error.message.includes('valid PDF')) {
+        console.error('❌ File is not a valid PDF format')
+      } else if (error.message.includes('pdf-parse')) {
+        console.error('❌ PDF parsing library error - file may be corrupted or password-protected')
+      }
+    }
+    
     return {
-      text: 'Unable to extract text from PDF',
+      text: `Unable to extract text from PDF: ${error instanceof Error ? error.message : 'Unknown error'}`,
       title: undefined
     }
   }

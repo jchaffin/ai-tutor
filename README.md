@@ -1,36 +1,66 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI Tutor
 
-## Getting Started
+An AI-powered tutoring application built with Next.js, Prisma, and OpenAI.
 
-First, run the development server:
+## Local Development Setup
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+### Prerequisites
+- Node.js 20.x
+- Docker and Docker Compose
+- npm or yarn
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Database Setup
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. **Start the local PostgreSQL database:**
+   ```bash
+   npm run db:up
+   ```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+2. **Set up your environment variables:**
+   ```bash
+   cp env.local.example .env.local
+   # Edit .env.local with your actual values
+   ```
 
-## Learn More
+3. **Push the database schema:**
+   ```bash
+   npm run db:push
+   ```
 
-To learn more about Next.js, take a look at the following resources:
+4. **Seed the database (optional):**
+   ```bash
+   npm run db:seed
+   ```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Development Commands
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Start development server:** `npm run dev`
+- **Start database:** `npm run db:up`
+- **Stop database:** `npm run db:down`
+- **Reset database:** `npm run db:reset`
+- **Open Prisma Studio:** `npm run db:studio`
+- **Push schema changes:** `npm run db:push`
 
-## Deploy on Vercel
+### Database Management
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The project uses PostgreSQL with Docker for local development. The database will be available at `localhost:5432` with:
+- Database: `ai_tutor`
+- Username: `postgres`
+- Password: `postgres`
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Features
+
+- AI-powered tutoring with document analysis
+- PDF document upload and processing
+- Real-time chat interface
+- User authentication with NextAuth.js
+- Document highlighting and annotations
+
+## Tech Stack
+
+- **Frontend:** Next.js 15, React 19, Tailwind CSS
+- **Backend:** Next.js API routes
+- **Database:** PostgreSQL with Prisma ORM
+- **Authentication:** NextAuth.js
+- **AI:** OpenAI API
+- **PDF Processing:** PDF.js, pdf-parse
