@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "npm run copy-pdf-worker && next dev --turbopack",
-    "build": "npm run copy-pdf-worker && next build",
+    "build": "npm run copy-pdf-worker && prisma generate && prisma db push && npm run db:seed && next build",
     "start": "next start",
     "postinstall": "prisma generate",
     "lint": "next lint",
@@ -45,6 +45,7 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-markdown": "^10.1.0",
+    "@vercel/blob": "^0.22.0",
     "react-pdf-highlighter": "^8.0.0-rc.0",
     "tailwind-merge": "^2.5.4",
     "tsx": "^4.19.2",

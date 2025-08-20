@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { readFile } from 'fs/promises'
-import { join } from 'path'
+import { NextResponse } from 'next/server'
 
 export async function GET(
   request: NextRequest,
@@ -27,22 +26,13 @@ export async function GET(
       return NextResponse.json({ error: 'Document not found' }, { status: 404 })
     }
 
-    // Read the file from disk
-    const filePath = join(process.cwd(), document.filepath)
-    const fileBuffer = await readFile(filePath)
+    // If filepath is a URL (Vercel Blob), redirect to it
+    if (document.filepath.startsWith('http')) {
+      return NextResponse.redirect(document.filepath)
+    }
 
-    // Return file with appropriate headers (convert Buffer → ArrayBuffer)
-    const ab = fileBuffer.buffer.slice(
-      fileBuffer.byteOffset,
-      fileBuffer.byteOffset + fileBuffer.byteLength
-    ) as ArrayBuffer
-    const blob = new Blob([ab], { type: document.mimeType })
-    return new NextResponse(blob, {
-      headers: {
-        'Content-Type': document.mimeType,
-        'Content-Disposition': `inline; filename="${document.filename}"`,
-      },
-    })
+    // Backward-compat: if local path, return 404 in prod
+    return NextResponse.json({ error: 'File is not available' }, { status: 404 })
   } catch (error) {
     console.error('Error serving file:', error)
     return NextResponse.json(

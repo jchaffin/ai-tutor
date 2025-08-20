@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { writeFile } from 'fs/promises'
-import { join } from 'path'
+import { put } from '@vercel/blob'
 import { randomUUID } from 'crypto'
 
 export async function POST(request: NextRequest) {
@@ -28,24 +27,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'File size exceeds 10MB limit' }, { status: 400 })
     }
 
-    const bytes = await file.arrayBuffer()
-    const buffer = Buffer.from(bytes)
+    const arrayBuffer = await file.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
 
     // Generate unique filename
     const fileExtension = '.pdf'
-    const uniqueFilename = randomUUID() + fileExtension
-    const uploadDir = join(process.cwd(), 'uploads')
-    const filepath = join(uploadDir, uniqueFilename)
+    const uniqueFilename = `${randomUUID()}${fileExtension}`
 
-    // Save file to disk
-    await writeFile(filepath, buffer)
+    // Upload to Vercel Blob
+    const blob = await put(uniqueFilename, buffer, {
+      access: 'authenticated',
+      contentType: file.type,
+    })
 
     // Save document metadata to database
     const document = await prisma.document.create({
       data: {
         title: file.name.replace('.pdf', ''),
         filename: file.name,
-        filepath: `uploads/${uniqueFilename}`,
+        filepath: blob.url,
         mimeType: file.type,
         size: file.size,
         userId: session.user.id,
