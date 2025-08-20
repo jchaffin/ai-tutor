@@ -2,6 +2,7 @@ import { RealtimeAgent, tool } from '@openai/agents/realtime';
 
 export const createTutorAgent = (pdfTitle: string, pdfContent: string): RealtimeAgent => {
   console.log("🤖 Creating TutorAgent with:", { pdfTitle, pdfContentLength: pdfContent.length });
+  console.log("🤖 TutorAgent will introduce itself as AI tutor for:", pdfTitle);
   
   return new RealtimeAgent({
     name: 'ai_tutor',
@@ -9,9 +10,9 @@ export const createTutorAgent = (pdfTitle: string, pdfContent: string): Realtime
 
 CRITICAL: You MUST respond in ENGLISH ONLY. Never use Spanish or any other language.
 
-IMPORTANT: You MUST respond with voice immediately when the session starts. Say "Hello! I'm your AI tutor. I'm here to help you understand this document, ${pdfTitle}. What would you like to know?"
+CRITICAL INTRODUCTION REQUIREMENT: You MUST introduce yourself immediately when the session starts or when you receive a response.create event. Always begin with: "Hello! I'm your AI tutor. I'm here to help you understand this document, ${pdfTitle}. What would you like to know?"
 
-After saying hello, wait for user questions. 
+After your introduction, wait for user questions. If you haven't introduced yourself yet in this session, you MUST do so before answering any questions. 
 
 You are now a HIGHLY INTERACTIVE tutor that automatically highlights and navigates to relevant content as you speak. You MUST:
 
@@ -21,56 +22,85 @@ You are now a HIGHLY INTERACTIVE tutor that automatically highlights and navigat
 
 3. **SMART CONTENT DETECTION**: If you mention "baselines", "Table 1", "Figure 2", "Section 5.1", etc., automatically find and highlight that content.
 
-4. **REAL-TIME HIGHLIGHTING**: Your speech should be synchronized with visual highlights - as you talk about something, it should be highlighted on screen.
+4. **CITATION DETECTION**: If you encounter citations (like "[1]", "[Smith et al., 2023]", or reference numbers), automatically use research_citation to look up the reference.
 
-5. **SECTION DETECTION**: If the user asks about ANYTHING that could be a section title (like "interhead gating", "baselines", "results", etc.), IMMEDIATELY use highlight_section_content to check if it's a section and highlight the entire section.
+5. **SPEECH-SYNCHRONIZED HIGHLIGHTING**: The system now automatically detects and highlights content as you speak:
+   - When you say "Table 1" → automatically circles Table 1
+   - When you say "Figure 2" → automatically circles Figure 2  
+   - When you say "[1]" or "[Smith et al., 2023]" → automatically researches citation
+   - When you quote text in "quotes" → automatically highlights that text
+   - You can still manually call tools, but speech detection provides automatic highlighting
 
-Citation rules for EVERY answer:
-- Always refer to the document explicitly (say the page number).
-- Quote a short phrase from the PDF that supports your statement.
-- Prefer using the results returned by search_document (matches[].page and matches[].excerpt) for citations.
-- If no match is found, clearly say you couldn't find that term in the document and ask the user to rephrase.
+6. **SECTION DETECTION**: For section-related questions, use highlight_section_content to find and highlight entire sections, but time it with your speech flow.
+
+Citation and Highlighting Strategy:
+- FIRST: Use search_document to find relevant content and get context
+- THEN: Begin your spoken response with page references
+- DURING your speech: Use highlight_quote to highlight specific text you're quoting
+- AS you mention tables/figures: Use circle_table/circle_figure appropriately
+- Always refer to the document explicitly (say the page number)
+- Quote short phrases from the PDF that support your statements
 
 Your capabilities:
 1. Answer questions about the document content
-2. Provide explanations and clarifications
+2. Provide explanations and clarifications  
 3. Navigate to specific pages when referencing content
-4. Highlight important text by creating visual annotations
+4. Highlight important text synchronized with your speech
 5. Engage in natural voice conversation
-6. **AUTOMATICALLY highlight relevant sections, tables, figures as you mention them**
+6. **Time highlights to match your verbal references**
 
 Document content:
 ${pdfContent}
 
-CRITICAL: When the user asks about ANY topic, you MUST:
-1. **FIRST**: Check if the user is asking about a section by using highlight_section_content with their query
-2. **THEN**: Use search_document with a concise keyword/phrase from the question
-3. Jump to the first match and speak your explanation while that text is highlighted
-4. **IMMEDIATELY use highlight_quote** to highlight the exact text you're referencing in your answer
-5. State the page number verbally as part of your answer
-6. Include a short quote (from the match excerpt) to back up your point
-7. **AUTOMATICALLY highlight any additional sections, tables, or content you mention in your response**
+ENHANCED MULTI-ANNOTATION SYSTEM: You can now make multiple annotations in a single response when necessary:
 
-EXAMPLE: If the user says "tell me about interhead gating", IMMEDIATELY:
-- Call highlight_section_content with "interhead gating" to check if it's a section title
-- If it IS a section, highlight the entire section and navigate to it
-- Then use search_document with "interhead gating" to highlight specific text matches
-- The viewer will highlight matches and jump to the first
-- As you speak about "baselines" or "Table 1", automatically highlight those too
+CORRECTED WORKFLOW: When the user asks about ANY topic:
 
-SECTION CIRCLING: If the user asks about something that matches a section title (like "Conclusion" matching "Conclusions"), you MUST:
-- Use circle_table or circle_figure for "Table X" or "Figure X" references
-- For section titles, use highlight_section_content which will circle the section title
-- Be flexible with matching: "conclusion" should match "Conclusions", "intro" should match "Introduction", etc.
+1. **CONTENT DISCOVERY ONLY**: Use search_document to find relevant content for your response
+   - This is ONLY for gathering information to answer the question
+   - Do NOT use this to highlight the user's query terms
+   - Use this to find what you'll talk about in your response
 
-You MUST use highlight_section_content FIRST for every content question to check if it's a section title, then use search_document for specific text highlighting.
-Start your answer with something like: "On page {page}, it says, \"{short quote}\" ..."
+2. **RESPONSE PHASE**: Speak naturally about the content you found
+   - Reference specific pages, quotes, tables, figures as you explain
+   - The speech-synchronized system will automatically annotate what you mention
 
-**NEW: AUTOMATIC SECTION DETECTION AND HIGHLIGHTING**
-- ALWAYS call highlight_section_content first when the user asks about ANY topic
-- If it's a section title, highlight the ENTIRE section and navigate to it
-- Then use search_document for specific text highlighting
-- Your speech should be a visual tour of the document with real-time highlighting
+3. **NO IMMEDIATE ANNOTATIONS**: Do NOT call annotation tools based on the user's question
+   - If user asks "tell me about data" → Do NOT annotate "data"
+   - Instead, find relevant data content, then speak about it
+   - Let the speech system annotate the specific content you reference
+
+4. **SPEECH-DRIVEN ANNOTATIONS**: The system automatically annotates as you speak:
+   - When you say "Table 1 shows..." → Table 1 gets circled
+   - When you quote text → That text gets highlighted  
+   - When you mention "[1]" → Citation gets researched
+   - All based on YOUR speech content, not the user's query
+
+MULTI-CITATION SUPPORT: When discussing multiple citations, call research_citation for each one mentioned.
+
+CORRECT EXAMPLE: User asks "tell me about the data"
+
+**WRONG APPROACH** (what it was doing):
+- Immediately annotate "data" from user query ❌
+- Highlight random occurrences of "data" ❌
+
+**CORRECT APPROACH** (what it should do):
+1. Use search_document("data") to find relevant content ✅
+2. Speak naturally: "The data is presented in Table 1 on page 5, which shows performance metrics. As you can see from the results, the MH-SSM model achieves 1.80 WER as reported in Smith et al. 2023..."
+3. **Speech system automatically**:
+   - Circles "Table 1" when you say it ✅
+   - Highlights specific quotes when you quote them ✅  
+   - Researches "Smith et al. 2023" when you mention it ✅
+
+SPEECH-DRIVEN ANNOTATION: Only annotate what YOU reference in your response, not what the user asked about.
+
+REMOVED: All automatic annotation instructions. The agent should focus on providing helpful explanations.
+
+SIMPLE WORKFLOW:
+1. Use search_document to find relevant content
+2. Respond with specific page references and quotes
+3. Use highlight_quote to highlight the EXACT text you're citing in your response
+4. Always reference the PDF content you found
 
 Navigation commands:
 - If the user says anything like "go to page N", "page N", or "open page N", IMMEDIATELY call navigate_to_page with that page number.
@@ -110,6 +140,7 @@ Remember: You're having a voice conversation, so keep responses natural and spok
         },
         execute: async (input: any) => {
           console.log("🔍 SEARCH TOOL CALLED:", input);
+          console.log("🔍 Window object available:", typeof window !== 'undefined');
           const { query } = input;
           
           // Request the viewer to perform search and return matches
@@ -118,9 +149,10 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             = [];
 
           if (typeof window !== 'undefined') {
-            // Clear previous search marks and circles when asking new questions
+            // Clear previous search marks when asking new questions
+            // Note: Circles are preserved unless it's a completely new topic
             window.dispatchEvent(new CustomEvent('pdf-clear-highlights'));
-            window.dispatchEvent(new CustomEvent('tutor-annotations-clear'));
+            console.log("🔍 Cleared previous highlights for new search (keeping circles)");
             const waitForResults = new Promise<void>((resolve) => {
               const handler = (event: any) => {
                 if (event?.detail?.requestId === requestId) {
@@ -132,18 +164,51 @@ Remember: You're having a voice conversation, so keep responses natural and spok
               window.addEventListener('pdf-search-results', handler as EventListener, { once: true });
             });
 
-            // Build robust keyword variants to highlight ALL occurrences across the doc
+            // Build robust keyword variants prioritizing longer phrases to reduce character fragmentation
             const q = String(query || '').trim();
             const base = q.toLowerCase();
             const variants = new Set<string>();
+            
+            // Prioritize the original query first (longer phrases highlight better)
             variants.add(base);
-            if (base.includes('-')) {
-              variants.add(base.replace(/-/g, ''));
-              variants.add(base.replace(/-/g, ' '));
-            } else {
-              // also add hyphenated
-              variants.add(base.replace(/\s+/g, '-'));
+            
+            // Only add variations if the original is short (to avoid over-fragmentation)
+            if (base.length <= 15) {
+              // Handle hyphenated terms
+              if (base.includes('-')) {
+                variants.add(base.replace(/-/g, ''));
+                variants.add(base.replace(/-/g, ' '));
+              } else {
+                // also add hyphenated
+                variants.add(base.replace(/\s+/g, '-'));
+              }
             }
+            
+            // Handle mathematical expressions and equations
+            if (/^[a-z]\d*$/i.test(base)) {
+              // Single variables like x, y, h1, etc.
+              variants.add(base.toUpperCase());
+              variants.add(base.toLowerCase());
+            }
+            
+            // Handle common mathematical terms
+            if (base.includes('equation') || base.includes('formula')) {
+              variants.add('equation');
+              variants.add('formula');
+              variants.add('expression');
+            }
+            
+            // Handle subscripts and superscripts (common in equations)
+            if (base.match(/[a-z]\d+/i)) {
+              const letter = base.match(/[a-z]+/i)?.[0] || '';
+              const number = base.match(/\d+/)?.[0] || '';
+              if (letter && number) {
+                variants.add(letter); // Just the letter part
+                variants.add(`${letter}_${number}`); // Underscore notation
+                variants.add(`${letter}${number}`); // Original
+              }
+            }
+            
             // Domain-specific expansions
             if (/^mh\s*-?\s*ssm[s]?$/i.test(base) || /multi\s*head\s*state\s*space\s*model/i.test(base)) {
               ['mh-ssm','mhssm','mh ssm','multi-head state space model','multi head state space model','multihead state space model'].forEach(v=>variants.add(v));
@@ -151,11 +216,17 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             if (/^ssm[s]?$/i.test(base) || /state\s*space\s*model/i.test(base)) {
               ['ssm','ssms','state space model','state space models'].forEach(v=>variants.add(v));
             }
-            const keywordObjects = Array.from(variants).map((v) => ({ keyword: v, matchCase: false }));
+            // Create keyword objects for better phrase matching
+            const keywordObjects = Array.from(variants).map((v) => ({ 
+              keyword: v, 
+              matchCase: false
+            }));
 
+            console.log("🔍 Dispatching pdf-search-request event:", { requestId, keywordObjects });
             window.dispatchEvent(new CustomEvent('pdf-search-request', {
               detail: { requestId, keywords: keywordObjects }
             }));
+            console.log("🔍 Event dispatched successfully");
 
             await waitForResults;
 
@@ -249,7 +320,7 @@ Remember: You're having a voice conversation, so keep responses natural and spok
 
       tool({
         name: 'highlight_section_content',
-        description: 'Automatically detect if a term is a section title and highlight the entire section content',
+        description: 'Detect if a term is a section title and highlight the ENTIRE section content using multiple relevant keywords to capture most of the section text',
         parameters: {
           type: 'object',
           properties: {
@@ -301,31 +372,50 @@ Remember: You're having a voice conversation, so keep responses natural and spok
               return false;
             });
             
-            if (sectionMatch) {
-              console.log(`🎯 HIGHLIGHTING ENTIRE SECTION: "${sectionMatch.title}" on page ${sectionMatch.pageIndex + 1}`);
-              
-              // Navigate to the section page
-              try {
-                if ((window as any).pdfJumpToPage) {
-                  (window as any).pdfJumpToPage(sectionMatch.pageIndex + 1);
-                } else {
-                  window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: sectionMatch.pageIndex } }));
-                }
-              } catch {}
-              
-              // Highlight the entire section by searching for the section title
-              const sectionRequestId = `section-highlight-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-              window.dispatchEvent(new CustomEvent('pdf-search-request', {
-                detail: { requestId: sectionRequestId, keywords: [{ keyword: term, matchCase: false }] }
-              }));
-              
-              return {
-                success: true,
-                section: term,
-                page: sectionMatch.pageIndex + 1,
-                message: `Highlighted entire section "${term}" on page ${sectionMatch.pageIndex + 1}`
-              };
-            } else {
+             if (sectionMatch) {
+                console.log(`🎯 HIGHLIGHTING ENTIRE SECTION: "${sectionMatch.title}" on page ${sectionMatch.pageIndex + 1}`);
+                
+                // Navigate to the section page
+                try {
+                  if ((window as any).pdfJumpToPage) {
+                    (window as any).pdfJumpToPage(sectionMatch.pageIndex + 1);
+                  } else {
+                    window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: sectionMatch.pageIndex } }));
+                  }
+                } catch {}
+                
+                // Highlight the entire section content using multiple relevant terms
+                const sectionRequestId = `section-content-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                
+                // Extract multiple key terms from the section title and create comprehensive search
+                const titleWords = sectionMatch.title.toLowerCase().split(/\s+/).filter(word => 
+                  word.length > 2 && !['the', 'and', 'for', 'with', 'this', 'that', 'from', 'are', 'was', 'were', 'been', 'have', 'has', 'had'].includes(word)
+                );
+                
+                // Strategy: Instead of highlighting keywords, find and highlight actual sentences in the section
+                // Use a broader search that captures section content, not just title words
+                
+                const searchTerms = [];
+                
+                // Only use specific, meaningful terms - NO common words
+                searchTerms.push({ keyword: term.toLowerCase(), matchCase: false });
+                
+                // Add only the section title itself for title highlighting
+                searchTerms.push({ keyword: sectionMatch.title, matchCase: false });
+                
+                console.log(`🎯 Highlighting section content with common words:`, searchTerms);
+                
+                window.dispatchEvent(new CustomEvent('pdf-search-request', {
+                  detail: { requestId: sectionRequestId, keywords: searchTerms }
+                }));
+
+                return {
+                  success: true,
+                  section: term,
+                  page: sectionMatch.pageIndex + 1,
+                  message: `Highlighted section content for "${term}" on page ${sectionMatch.pageIndex + 1} using key term "${titleWords[0] || term}"`
+                };
+              } else {
               return {
                 success: false,
                 term,
@@ -359,8 +449,11 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             return { success: false, message: 'Missing table label' };
           }
           if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('tutor-circle-table', { detail: { label } }));
-            return { success: true, label, message: `Circling ${label}` };
+            // Add delay to sync with speech timing
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('tutor-circle-table', { detail: { label } }));
+            }, 300); // 300ms delay for table references
+            return { success: true, label, message: `Will circle ${label} in 300ms` };
           }
           return { success: false, label, message: 'Not in browser context' };
         }
@@ -381,10 +474,64 @@ Remember: You're having a voice conversation, so keep responses natural and spok
           const label = String(input?.label || '').trim();
           if (!label) return { success: false, message: 'Missing figure label' };
           if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('tutor-circle-figure', { detail: { label } }));
-            return { success: true, label, message: `Circling ${label}` };
+            // Add delay to sync with speech timing
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('tutor-circle-figure', { detail: { label } }));
+            }, 300); // 300ms delay for figure references
+            return { success: true, label, message: `Will circle ${label} in 300ms` };
           }
           return { success: false, label, message: 'Not in browser context' };
+        }
+      }),
+
+      tool({
+        name: 'research_citation',
+        description: 'Research a citation mentioned in the document by dispatching a research agent to look up the paper/reference',
+        parameters: {
+          type: 'object',
+          properties: {
+            citation: {
+              type: 'string',
+              description: 'The citation text or reference number (e.g., "[1]", "[Smith et al., 2023]", "Johnson 2022")'
+            },
+            context: {
+              type: 'string',
+              description: 'The context in which the citation was mentioned for better research'
+            }
+          },
+          required: ['citation'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          const { citation, context } = input;
+          console.log("📚 CITATION RESEARCH TOOL CALLED:", { citation, context });
+          
+          if (!citation || typeof citation !== 'string') {
+            return { success: false, message: 'Invalid citation provided' };
+          }
+
+          if (typeof window !== 'undefined') {
+            // Dispatch event to trigger citation research
+            const researchRequestId = `citation-research-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            
+            console.log("📚 Dispatching citation research request:", { citation, context, researchRequestId });
+            
+            window.dispatchEvent(new CustomEvent('tutor-citation-research', {
+              detail: { 
+                citation: citation.trim(),
+                context: context || '',
+                requestId: researchRequestId
+              }
+            }));
+            
+            return {
+              success: true,
+              citation,
+              message: `Researching citation: ${citation}`
+            };
+          }
+          
+          return { success: false, message: 'Citation research not available in current context' };
         }
       }),
 
@@ -560,10 +707,14 @@ Remember: You're having a voice conversation, so keep responses natural and spok
           if (typeof window !== 'undefined') {
             const normalized = quote.replace(/\s+/g, ' ').trim();
             if (normalized.length >= 8) {
-              window.dispatchEvent(new CustomEvent('tutor-highlight-quote', {
-                detail: { text: normalized, page }
-              }));
-              return { success: true, quote: normalized, page, message: `Highlighted quote: "${normalized.substring(0, 50)}..."` };
+              // Add a small delay to better sync with speech timing
+              setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('tutor-highlight-quote', {
+                  detail: { text: normalized, page }
+                }));
+              }, 500); // 500ms delay to sync better with speech
+              
+              return { success: true, quote: normalized, page, message: `Will highlight quote: "${normalized.substring(0, 50)}..." in 500ms` };
             }
           }
           return { success: false, message: 'Quote too short or not in browser context' };

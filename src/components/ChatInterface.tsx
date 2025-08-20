@@ -6,6 +6,7 @@ import { useTranscript } from '@/contexts/TranscriptContext'
 import { useRealtimeSession } from '@/hooks/useRealtimeSession'
 import { useHandleSessionHistory } from '@/hooks/useHandleSessionHistory'
 import { createTutorAgent } from '@/lib/agents/tutorAgent'
+import { createCitationResearchAgent } from '@/lib/agents/citationAgent'
 import { SessionStatus, PDFAnnotation } from '@/types'
 import ReactMarkdown from "react-markdown"
 
@@ -212,16 +213,155 @@ export default function ChatInterface({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // Listen to agent speech transcription for real-time annotation
+  useEffect(() => {
+    const handleSpeechTranscription = (event: any) => {
+      const transcript = event?.delta || event?.transcript || '';
+      if (!transcript || typeof transcript !== 'string') return;
+      
+      console.log('🎤 Agent speech delta:', transcript);
+      
+      // Analyze the speech for citation patterns
+      const citationMatches = transcript.match(/\[(\d+)\]|([A-Z][a-z]+\s+et\s+al\.?,?\s+\d{4})|([A-Z][a-z]+,?\s+\d{4})/g);
+      if (citationMatches) {
+        citationMatches.forEach(citation => {
+          console.log('📚 Detected citation in speech:', citation);
+          // Trigger citation research
+          window.dispatchEvent(new CustomEvent('tutor-citation-research', {
+            detail: { 
+              citation: citation.trim(),
+              context: transcript,
+              requestId: `speech-citation-${Date.now()}`
+            }
+          }));
+        });
+      }
+      
+      // Analyze speech for table/figure references
+      const tableMatches = transcript.match(/Table\s+\d+/gi);
+      if (tableMatches) {
+        tableMatches.forEach(table => {
+          console.log('📊 Detected table reference in speech:', table);
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('tutor-circle-table', {
+              detail: { label: table.trim() }
+            }));
+          }, 200); // Small delay to sync with speech
+        });
+      }
+      
+      const figureMatches = transcript.match(/Figure\s+\d+/gi);
+      if (figureMatches) {
+        figureMatches.forEach(figure => {
+          console.log('📈 Detected figure reference in speech:', figure);
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('tutor-circle-figure', {
+              detail: { label: figure.trim() }
+            }));
+          }, 200);
+        });
+      }
+      
+      // Analyze speech for direct quotes (text in quotes)
+      const quoteMatches = transcript.match(/"([^"]+)"/g);
+      if (quoteMatches) {
+        quoteMatches.forEach(quote => {
+          const cleanQuote = quote.replace(/"/g, '').trim();
+          if (cleanQuote.length > 10) {
+            console.log('💬 Detected quote in speech:', cleanQuote);
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('tutor-highlight-quote', {
+                detail: { text: cleanQuote }
+              }));
+            }, 300);
+          }
+        });
+      }
+    };
+
+    // Listen to speech transcription events
+    window.addEventListener('response.audio_transcript.delta', handleSpeechTranscription);
+    window.addEventListener('response.audio_transcript.done', handleSpeechTranscription);
+    
+    return () => {
+      window.removeEventListener('response.audio_transcript.delta', handleSpeechTranscription);
+      window.removeEventListener('response.audio_transcript.done', handleSpeechTranscription);
+    };
+  }, []);
+
+  // Handle citation research requests
+  useEffect(() => {
+    const handleCitationResearch = async (event: CustomEvent) => {
+      const { citation, context, requestId } = event.detail || {};
+      console.log('📚 Citation research request received:', { citation, context, requestId });
+      
+      if (!citation) {
+        console.warn('📚 No citation provided for research');
+        return;
+      }
+
+      try {
+        // Add a message to show research is starting
+        const researchMessage: Message = {
+          id: `citation-research-${Date.now()}`,
+          role: 'assistant',
+          content: `🔍 Researching citation: ${citation}...`,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, researchMessage]);
+
+        // Simulate citation research (in a real implementation, this would use the citation agent)
+        setTimeout(() => {
+          const resultMessage: Message = {
+            id: `citation-result-${Date.now()}`,
+            role: 'assistant',
+            content: `📚 **Citation Research Results for: ${citation}**\n\nThis citation appears to reference an academic paper. Based on the context: "${context || 'No context provided'}"\n\n*Note: This is a placeholder implementation. In a full system, this would search academic databases to provide detailed information about the referenced paper, including authors, title, abstract, and relevance to the current document.*\n\n**Next steps:** You could ask me to explain how this citation relates to the current document, or ask about other citations you're interested in.`,
+            timestamp: new Date()
+          };
+          setMessages(prev => [...prev, resultMessage]);
+        }, 2000);
+
+      } catch (error) {
+        console.error('📚 Error handling citation research:', error);
+        const errorMessage: Message = {
+          id: `citation-error-${Date.now()}`,
+          role: 'assistant',
+          content: `❌ Sorry, I encountered an error while researching the citation: ${citation}`,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, errorMessage]);
+      }
+    };
+
+    window.addEventListener('tutor-citation-research', handleCitationResearch as EventListener);
+    return () => {
+      window.removeEventListener('tutor-citation-research', handleCitationResearch as EventListener);
+    };
+  }, [setMessages]);
+
   const fetchEphemeralKey = async (): Promise<string | null> => {
     try {
+      console.log("🔑 Attempting to fetch ephemeral key...");
       const response = await fetch('/api/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
 
+      console.log("🔑 Response status:", response.status, response.statusText);
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        console.error(`Failed to get ephemeral key: ${response.status} ${response.statusText}`, errorData);
+        console.error(`❌ Failed to get ephemeral key: ${response.status} ${response.statusText}`, errorData);
+        
+        // More specific error messages
+        if (response.status === 500) {
+          console.error("❌ Server error - check OpenAI API key configuration");
+        } else if (response.status === 401) {
+          console.error("❌ Authentication error - session may be expired");
+        } else if (response.status === 429) {
+          console.error("❌ Rate limited - too many requests to OpenAI API");
+        }
+        
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
@@ -245,6 +385,8 @@ export default function ChatInterface({
     }
 
     try {
+      // Clear transcript before connecting to ensure clean state
+      console.log("🧹 Clearing transcript before connecting...")
       clearTranscript()
       console.log("🔑 Fetching ephemeral key...")
       const ephemeralKey = await fetchEphemeralKey()
@@ -293,7 +435,19 @@ export default function ChatInterface({
       
       // Enable transcription immediately and trigger greeting
       try {
+        console.log("🤖 Triggering agent introduction...");
         updateSession(true);
+        
+        // Also send a direct response.create event as backup
+        setTimeout(() => {
+          try {
+            console.log("🤖 Backup: Sending response.create event...");
+            sendEvent({ type: "response.create" });
+          } catch (err) {
+            console.error("❌ Failed to send backup response.create:", err);
+          }
+        }, 1000);
+        
       } catch (error) {
         console.error("❌ Failed to start transcription:", error);
       }
@@ -495,8 +649,10 @@ export default function ChatInterface({
                         console.error('❌ Failed to archive chat on disconnect');
                       }
                       try { await fetchChatHistory(); } catch {}
-                      setMessages([]);
+                      // Clear transcript first, then clear messages to ensure proper cleanup order
+                      console.log("🧹 Clearing transcript and messages on disconnect...")
                       clearTranscript();
+                      setMessages([]);
                     } catch (e) {
                       console.error('❌ Archive on disconnect failed:', e);
                     }

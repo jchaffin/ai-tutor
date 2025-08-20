@@ -111,8 +111,20 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
           // This function is no longer used as we removed custom highlighting
         },
         clearHighlights: () => {
-          console.log("🎯 PDF API: Clearing all highlights");
-          // This function is no longer used as we removed custom highlighting
+          console.log("🎯 PDF API: Clearing all highlights and circles");
+          try {
+            if (searchPluginInstanceRef.current) {
+              searchPluginInstanceRef.current.clearHighlights();
+              console.log("🎯 PDF API: All highlights cleared successfully");
+            } else {
+              console.warn("🎯 PDF API: Search plugin not available for clearing highlights");
+            }
+            // Also clear circles
+            clearAllCircles();
+            console.log("🎯 PDF API: All circles cleared successfully");
+          } catch (error) {
+            console.error("🎯 PDF API: Error clearing highlights/circles:", error);
+          }
         },
         goToPage: (pageNumber: number) => {
           console.log("🎯 PDF API: Going to page:", pageNumber);
@@ -120,23 +132,59 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             onPageChange(pageNumber);
           }
         },
-        searchAndHighlight: (searchTerm: string, options: any) => {
+        searchAndHighlight: async (searchTerm: string, options: any) => {
           console.log("🎯 PDF API: Searching for text:", searchTerm);
-          // This will use react-pdf-viewer's built-in search functionality
-          // For now, create a simple highlight at estimated positions
-          const fakeResults = [{
-            text: searchTerm,
-            highlightAreas: [{
-              pageIndex: 0, // First page for demo
-              left: 20,
-              top: 30,
-              width: searchTerm.length * 0.8,
-              height: 3
-            }]
-          }];
           
-          if (options.onSearchComplete) {
-            options.onSearchComplete(fakeResults);
+          if (!searchTerm || !searchPluginInstanceRef.current) {
+            console.warn("🎯 PDF API: Invalid search term or plugin not available");
+            if (options.onSearchComplete) {
+              options.onSearchComplete([]);
+            }
+            return;
+          }
+
+          try {
+            // Clear previous highlights first
+            searchPluginInstanceRef.current.clearHighlights();
+            
+            // Perform the actual search using react-pdf-viewer
+            const matches = await searchPluginInstanceRef.current.highlight([{
+              keyword: searchTerm,
+              matchCase: false
+            }]);
+            
+            console.log("🎯 PDF API: Real search results:", matches);
+            
+            // Convert matches to the expected format
+            const results = matches.map((match, index) => ({
+              text: searchTerm,
+              matchIndex: index,
+              pageIndex: match.pageIndex,
+              startIndex: match.startIndex,
+              endIndex: match.endIndex,
+              highlightAreas: [{
+                pageIndex: match.pageIndex,
+                left: 0, // react-pdf-viewer handles positioning internally
+                top: 0,
+                width: 100,
+                height: 2
+              }]
+            }));
+            
+            if (options.onSearchComplete) {
+              options.onSearchComplete(results);
+            }
+            
+            // Jump to first match if found
+            if (matches.length > 0) {
+              searchPluginInstanceRef.current.jumpToMatch(0);
+            }
+            
+          } catch (error) {
+            console.error("🎯 PDF API: Search failed:", error);
+            if (options.onSearchComplete) {
+              options.onSearchComplete([]);
+            }
           }
         }
       };
@@ -186,7 +234,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   // REMOVED: Custom highlight render functions that were creating random boxes
   // We now only use searchPlugin's native text highlighting
 
-  // Create plugins (stable instance)
+  // Create plugins (stable instance) with simple, clean highlighting
   const searchPluginInstanceRef = useRef(searchPlugin({ 
     enableShortcuts: true,
     keyword: ''
@@ -395,68 +443,113 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     };
   }, [isDocLoaded, pageNavigationPluginInstance]);
 
+  // Highlight queue to prevent conflicts
+  const highlightQueueRef = useRef<Array<{ requestId: string; keywords: any; timestamp: number }>>([]);
+  const processingHighlightRef = useRef<boolean>(false);
+
+  const processHighlightQueue = async () => {
+    if (processingHighlightRef.current || highlightQueueRef.current.length === 0) {
+      return;
+    }
+
+    processingHighlightRef.current = true;
+    const currentRequest = highlightQueueRef.current.shift();
+    
+    if (!currentRequest) {
+      processingHighlightRef.current = false;
+      return;
+    }
+
+    const { requestId, keywords: reqKeywords } = currentRequest;
+    console.log("🔍 PDF: Processing highlight request:", { requestId, keywords: reqKeywords });
+
+    try {
+      // Clear previous highlights
+      if (searchPluginInstanceRef.current) {
+        searchPluginInstanceRef.current.clearHighlights();
+        console.log("🔍 PDF: Previous highlights cleared");
+      }
+      
+      // Only clear circles for new search operations, not for quote highlighting
+      const isQuoteHighlight = currentRequest.requestId.includes('quote-highlight');
+      if (!isQuoteHighlight) {
+        clearAllCircles();
+        console.log("🔍 PDF: Previous circles cleared (new search operation)");
+      } else {
+        console.log("🔍 PDF: Keeping circles visible (quote highlighting)");
+      }
+
+      // Small delay to ensure clearing is complete
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      if (!searchPluginInstanceRef.current) {
+        console.error("🔍 PDF: Search plugin instance not available");
+        return;
+      }
+      
+      const matches = await searchPluginInstanceRef.current.highlight(reqKeywords as any);
+      console.log("🔍 PDF: Real search results found:", matches.length, "matches");
+      
+      const results = matches.map((m, i) => {
+        const text = m.pageText || '';
+        const contextStart = Math.max(0, m.startIndex - 80);
+        const contextEnd = Math.min(text.length, m.endIndex + 80);
+        const excerpt = text.slice(contextStart, contextEnd);
+        const matchedText = text.slice(m.startIndex, m.endIndex);
+        
+        console.log(`🔍 PDF: Match ${i + 1} on page ${m.pageIndex + 1}: "${matchedText}" (${m.startIndex}-${m.endIndex})`);
+        
+        return {
+          pageIndex: m.pageIndex,
+          page: m.pageIndex + 1,
+          matchIndex: m.matchIndex,
+          globalIndex: i,
+          startIndex: m.startIndex,
+          endIndex: m.endIndex,
+          excerpt,
+          matchedText,
+        };
+      });
+      
+      console.log("🔍 PDF: Processed real search results:", results.length, "total matches");
+      window.dispatchEvent(new CustomEvent('pdf-search-results', {
+        detail: { requestId, results }
+      }));
+      
+    } catch (err) {
+      console.error('🔍 PDF: Search request failed', err);
+      window.dispatchEvent(new CustomEvent('pdf-search-results', {
+        detail: { requestId, results: [] }
+      }));
+    } finally {
+      processingHighlightRef.current = false;
+      // Process next item in queue after a small delay
+      setTimeout(processHighlightQueue, 100);
+    }
+  };
+
   // Listen for search-related events from the agent/UI
   useEffect(() => {
     const handleSearchRequest = async (event: any) => {
       const requestId = event?.detail?.requestId;
       const reqKeywords = event?.detail?.keywords as SingleKeyword | SingleKeyword[];
-      console.log("🔍 PDF: Search request received:", { requestId, keywords: reqKeywords });
+      console.log("🔍 PDF: Search request received and queued:", { requestId, keywords: reqKeywords });
+      console.log("🔍 PDF: Event detail:", event.detail);
       
       if (!reqKeywords) {
         console.warn("🔍 PDF: No keywords provided for search");
         return;
       }
       
-      lastKeywordsRef.current = reqKeywords;
-      try {
-        console.log("🔍 PDF: Clearing previous highlights...");
-        // Ensure old marks are removed before applying new ones
-        try { 
-          if (searchPluginInstanceRef.current) {
-            searchPluginInstanceRef.current.clearHighlights(); 
-            console.log("🔍 PDF: Previous highlights cleared");
-          }
-        } catch (err) {
-          console.warn("🔍 PDF: Failed to clear highlights:", err);
-        }
-        
-        console.log("🔍 PDF: Applying new highlights for:", reqKeywords);
-        
-        // Add safety check for search plugin instance
-        if (!searchPluginInstanceRef.current) {
-          console.error("🔍 PDF: Search plugin instance not available");
-          return;
-        }
-        
-        const matches: Match[] = await searchPluginInstanceRef.current.highlight(reqKeywords as any);
-        console.log("🔍 PDF: Search results:", matches);
-        
-        const results = matches.map((m, i) => {
-          const text = m.pageText || '';
-          const contextStart = Math.max(0, m.startIndex - 80);
-          const contextEnd = Math.min(text.length, m.endIndex + 80);
-          const excerpt = text.slice(contextStart, contextEnd);
-          return {
-            pageIndex: m.pageIndex,
-            page: m.pageIndex + 1,
-            matchIndex: m.matchIndex,
-            globalIndex: i,
-            startIndex: m.startIndex,
-            endIndex: m.endIndex,
-            excerpt,
-          };
-        });
-        
-        console.log("🔍 PDF: Processed results:", results);
-        window.dispatchEvent(new CustomEvent('pdf-search-results', {
-          detail: { requestId, results }
-        }));
-      } catch (err) {
-        console.error('🔍 PDF: Search request failed', err);
-        window.dispatchEvent(new CustomEvent('pdf-search-results', {
-          detail: { requestId, results: [] }
-        }));
-      }
+      // Add to queue instead of processing immediately
+      highlightQueueRef.current.push({
+        requestId,
+        keywords: reqKeywords,
+        timestamp: Date.now()
+      });
+      
+      // Start processing queue
+      processHighlightQueue();
     };
 
     const handleSetKeywords = async (event: any) => {
@@ -514,6 +607,9 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         if (searchPluginInstanceRef.current) {
           searchPluginInstanceRef.current.clearHighlights(); 
         }
+        // Only clear circles if explicitly requested via 'tutor-annotations-clear' event
+        // Don't automatically clear circles with every highlight clear
+        console.log("🔍 PDF: Cleared highlights (circles preserved)");
       } catch {}
     };
 
@@ -530,27 +626,175 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     };
   }, []);
 
-  // Listen for requests to circle a table label (e.g., "Table 1")
+  // Listen for requests to circle a table label (e.g., "Table 1") and highlight quotes
   useEffect(() => {
+    // Function to get actual table boundaries from PDF structure
+    const getTableBoundariesFromPDF = async (pageIndex: number, labelText: string) => {
+      try {
+        console.log(`🎯 Analyzing PDF structure for table: ${labelText} on page ${pageIndex + 1}`);
+        
+        // Access the PDF document from the viewer
+        const pdfDoc = (window as any).__pdfDocument;
+        if (!pdfDoc) {
+          console.log('🎯 PDF document not available for structure analysis');
+          return null;
+        }
+        
+        const page = await pdfDoc.getPage(pageIndex + 1);
+        const textContent = await page.getTextContent();
+        const viewport = page.getViewport({ scale: 1 });
+        
+        // Find the label position in the text content
+        let labelItem = null;
+        let labelIndex = -1;
+        
+        for (let i = 0; i < textContent.items.length; i++) {
+          const item = textContent.items[i];
+          if (item.str && item.str.toLowerCase().includes(labelText.toLowerCase())) {
+            labelItem = item;
+            labelIndex = i;
+            break;
+          }
+        }
+        
+        if (!labelItem) {
+          console.log('🎯 Label not found in PDF text content');
+          return null;
+        }
+        
+        console.log(`🎯 Found label at index ${labelIndex}:`, labelItem);
+        
+        // Analyze items after the label to find table structure
+        const tableItems = [];
+        const labelY = labelItem.transform[5]; // Y coordinate
+        const labelX = labelItem.transform[4]; // X coordinate
+        
+        // Look for structured content below the label
+        for (let i = labelIndex + 1; i < textContent.items.length; i++) {
+          const item = textContent.items[i];
+          const itemY = item.transform[5];
+          const itemX = item.transform[4];
+          
+          // Stop if we've moved too far down - tables are usually much closer
+          if (labelY - itemY > 100) break; // Much more restrictive: only 100 units below label
+          
+          // Much more restrictive: Only include actual table content
+          if (item.str && (
+            /^\d+\.?\d*$/.test(item.str.trim()) || // Pure numbers (table data)
+            /^[A-Z][a-z]+$/.test(item.str.trim()) || // Model names like "AED", "Transformer"
+            item.str.includes('M') || // Parameter counts like "116.2M"
+            /^[a-z]+$/.test(item.str.trim()) && item.str.length < 10 || // Short lowercase (like "clean", "test")
+            Math.abs(itemX - labelX) < 150 // Much closer horizontal alignment for table cells
+          )) {
+            tableItems.push({
+              text: item.str,
+              x: itemX,
+              y: itemY,
+              width: item.width || 0,
+              height: item.height || 0
+            });
+          }
+        }
+        
+        if (tableItems.length === 0) {
+          console.log('🎯 No table items found after label');
+          return null;
+        }
+        
+        // Calculate actual table boundaries
+        const minX = Math.min(labelX, ...tableItems.map(item => item.x));
+        const maxX = Math.max(labelX + (labelItem.width || 0), ...tableItems.map(item => item.x + item.width));
+        const minY = Math.min(labelY, ...tableItems.map(item => item.y));
+        const maxY = Math.max(labelY, ...tableItems.map(item => item.y));
+        
+        console.log(`🎯 PDF structure analysis - Table bounds: ${minX}, ${minY} to ${maxX}, ${maxY}`);
+        
+        return {
+          left: minX,
+          top: maxY, // PDF coordinates are flipped
+          right: maxX,
+          bottom: minY,
+          width: maxX - minX,
+          height: labelY - minY // Height in PDF coordinates
+        };
+        
+      } catch (error) {
+        console.error('🎯 Error analyzing PDF structure:', error);
+        return null;
+      }
+    };
+
     const circleByLabel = (label: string) => {
+      console.log(`🎯 Circling label with PDF structure analysis: ${label}`);
+      
       const requestId = `circle-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const onResults = (e: any) => {
         if (e?.detail?.requestId !== requestId) return;
         window.removeEventListener('pdf-search-results', onResults as EventListener);
         const results = (e?.detail?.results || []) as Array<{ pageIndex: number; matchIndex: number }>;
-        if (!results.length) return;
+        if (!results.length) {
+          console.log(`🎯 No search results found for label: ${label}`);
+          return;
+        }
+        
         const first = results[0];
-        setTimeout(() => {
+        console.log(`🎯 Found label on page ${first.pageIndex + 1}, analyzing structure...`);
+        
+        setTimeout(async () => {
           try {
             const layer = document.querySelector(`[data-testid="core__page-layer-${first.pageIndex}"]`) as HTMLElement | null;
-            if (!layer) return;
+            if (!layer) {
+              console.log(`🎯 Could not find page layer for page ${first.pageIndex}`);
+              return;
+            }
+
+            // Try PDF structure analysis first
+            const pdfBounds = await getTableBoundariesFromPDF(first.pageIndex, label);
+            if (pdfBounds) {
+              console.log(`🎯 Using PDF structure bounds:`, pdfBounds);
+              
+              // Convert PDF coordinates to screen coordinates
+              const layerRect = layer.getBoundingClientRect();
+              // For now, use a simple approach - just circle a reasonable area around the label
+              const hlEls = layer.querySelectorAll('.rpv-search__highlight');
+              if (hlEls && hlEls.length > 0) {
+                const firstHl = hlEls[0] as HTMLElement;
+                const hlRect = firstHl.getBoundingClientRect();
+                const labelLeft = hlRect.left - layerRect.left;
+                const labelTop = hlRect.top - layerRect.top;
+                
+                // Create a much smaller, more precise circle
+                const padding = 20;
+                const circleWidth = Math.min(300, layerRect.width * 0.4); // Max 300px or 40% of page
+                const circleHeight = Math.min(200, layerRect.height * 0.25); // Max 200px or 25% of page
+                
+                drawCircleOnPage(first.pageIndex, {
+                  left: Math.max(0, labelLeft - padding),
+                  top: Math.max(0, labelTop - padding),
+                  width: circleWidth,
+                  height: circleHeight,
+                });
+                
+                console.log(`🎯 Drew precise table circle: ${circleWidth}x${circleHeight} at ${labelLeft}, ${labelTop}`);
+                return;
+              }
+            }
+            
             const hlEls = layer.querySelectorAll('.rpv-search__highlight');
-            if (!hlEls || hlEls.length === 0) return;
+            if (!hlEls || hlEls.length === 0) {
+              console.log(`🎯 No highlight elements found for ${label}`);
+              return;
+            }
+            
+            console.log(`🎯 Found ${hlEls.length} highlight elements`);
+            
             const layerRect = layer.getBoundingClientRect();
             let minLeft = Number.POSITIVE_INFINITY;
             let minTop = Number.POSITIVE_INFINITY;
             let maxRight = 0;
             let maxBottom = 0;
+            
+            // Get bounds of all highlighted elements (the label)
             hlEls.forEach((n) => {
               const r = (n as HTMLElement).getBoundingClientRect();
               minLeft = Math.min(minLeft, r.left);
@@ -558,30 +802,356 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
               maxRight = Math.max(maxRight, r.right);
               maxBottom = Math.max(maxBottom, r.bottom);
             });
+            
             if (!isFinite(minLeft) || !isFinite(minTop)) return;
-            const pad = 16;
-            const pageW = layerRect.width;
-            const pageH = layerRect.height;
-            const captionTop = Math.max(0, minTop - layerRect.top);
-            const targetWidth = Math.min(pageW - pad * 2, pageW * 0.92);
-            const targetLeft = Math.max(0, (pageW - targetWidth) / 2);
-            const extendDown = Math.min(pageH * 0.32, pageH - captionTop - pad * 2);
-            const targetTop = Math.max(0, captionTop - pad * 0.5);
-            const targetHeight = Math.max(48, extendDown + (maxBottom - minTop));
+            
+            // Convert to page-relative coordinates
+            const labelLeft = minLeft - layerRect.left;
+            const labelTop = minTop - layerRect.top;
+            const labelWidth = maxRight - minLeft;
+            const labelHeight = maxBottom - minTop;
+            
+            console.log(`🎯 Label bounds: ${labelLeft}, ${labelTop}, ${labelWidth}x${labelHeight}`);
+            
+            // Advanced content-aware circle positioning
+            const isTable = /table/i.test(label);
+            const isFigure = /figure/i.test(label);
+            
+            // Analyze content structure for 2-column layout
+            const analyzeContentBounds = () => {
+              // Get all text elements in the page layer
+              const textElements = Array.from(layer.querySelectorAll('span, div')).filter(el => {
+                const text = el.textContent?.trim();
+                return text && text.length > 0;
+              });
+              
+              if (textElements.length === 0) {
+                console.log('🎯 No text elements found for content analysis');
+                return null;
+              }
+              
+              // Improved 2-column detection by analyzing actual text distribution
+              const pageWidth = layerRect.width;
+              
+              // Analyze text distribution to find the actual column boundary
+              const textPositions = textElements.map(el => {
+                const rect = el.getBoundingClientRect();
+                return rect.left - layerRect.left;
+              }).sort((a, b) => a - b);
+              
+              // Find the gap between columns by looking for the largest horizontal gap
+              let columnBoundary = pageWidth / 2; // Default fallback
+              let maxGap = 0;
+              
+              for (let i = 1; i < textPositions.length; i++) {
+                const gap = textPositions[i] - textPositions[i-1];
+                if (gap > maxGap && gap > 30) { // Minimum gap of 30px to be considered column separator
+                  maxGap = gap;
+                  columnBoundary = textPositions[i-1] + gap / 2;
+                }
+              }
+              
+              // Determine which column the label is in based on detected boundary
+              const isLeftColumn = labelLeft < columnBoundary;
+              const columnStart = isLeftColumn ? 0 : columnBoundary;
+              const columnEnd = isLeftColumn ? columnBoundary : pageWidth;
+              
+              console.log(`🎯 Detected column boundary at ${columnBoundary.toFixed(1)}px`);
+              console.log(`🎯 Label in ${isLeftColumn ? 'LEFT' : 'RIGHT'} column (${columnStart.toFixed(1)}-${columnEnd.toFixed(1)})`);
+              
+              // Enhanced table/figure content detection for 2-column layout
+              const contentElements = textElements.filter(el => {
+                const rect = el.getBoundingClientRect();
+                const elTop = rect.top - layerRect.top;
+                const elLeft = rect.left - layerRect.left;
+                const elRight = elLeft + rect.width;
+                
+                // Check if element is in the same column
+                const elementInColumn = isLeftColumn ? 
+                  (elLeft >= columnStart && elLeft < columnEnd) :
+                  (elLeft >= columnStart && elLeft < layerRect.width);
+                
+                if (!elementInColumn) return false;
+                
+                // For tables, look for structured content (rows, cells, data)
+                if (isTable) {
+                  // Tables: look for content below the label (table rows/data)
+                  const isBelow = elTop >= labelTop - 20; // Allow slight overlap
+                  const horizontalOverlap = !(elRight < labelLeft - 100 || elLeft > labelLeft + labelWidth + 100);
+                  
+                  // Much more restrictive for tables - only include elements very close to the table
+                  const isVeryClose = (elTop - labelTop) < 200; // Reduced from 500 to 200
+                  const hasTableLikeContent = el.textContent && (
+                    /\d/.test(el.textContent) || // Contains numbers (common in tables)
+                    el.textContent.length < 50 || // Short text (table cells)
+                    /[|─┌┐└┘├┤┬┴┼]/.test(el.textContent) // Table drawing characters
+                  );
+                  
+                  return isBelow && horizontalOverlap && isVeryClose && hasTableLikeContent;
+                } else if (isFigure) {
+                  // Figures: look for content around the label (captions, figure content)
+                  const verticalDistance = Math.abs(elTop - labelTop);
+                  const horizontalDistance = Math.abs(elLeft - labelLeft);
+                  
+                  return verticalDistance < 300 && horizontalDistance < (pageWidth / 2) * 0.8;
+                } else {
+                  // Generic: nearby content
+                  const verticalDistance = Math.abs(elTop - labelTop);
+                  const horizontalDistance = Math.abs(elLeft - labelLeft);
+                  
+                  return verticalDistance < 200 && horizontalDistance < (pageWidth / 2) * 0.7;
+                }
+              });
+              
+              if (contentElements.length === 0) {
+                console.log('🎯 No content elements found near label in same column');
+                return null;
+              }
+              
+              console.log(`🎯 Found ${contentElements.length} content elements in same column`);
+              
+              // For tables, try to find the actual table bottom boundary
+              let tableBottomY = labelTop;
+              if (isTable && contentElements.length > 0) {
+                // Sort elements by vertical position to find table structure
+                const sortedElements = contentElements
+                  .map(el => {
+                    const rect = el.getBoundingClientRect();
+                    return {
+                      element: el,
+                      top: rect.top - layerRect.top,
+                      bottom: rect.top - layerRect.top + rect.height,
+                      left: rect.left - layerRect.left,
+                      text: el.textContent?.trim() || ''
+                    };
+                  })
+                  .sort((a, b) => a.top - b.top);
+                
+                // Look for table patterns: repeated horizontal structures, similar spacing
+                const rowElements = [];
+                let lastRowY = -1;
+                const rowSpacing = [];
+                
+                for (const elem of sortedElements) {
+                  if (elem.top > labelTop) { // Only consider elements below the label
+                    if (lastRowY >= 0) {
+                      const spacing = elem.top - lastRowY;
+                      rowSpacing.push(spacing);
+                    }
+                    rowElements.push(elem);
+                    lastRowY = elem.top;
+                  }
+                }
+                
+                // Find the consistent row spacing to detect table end
+                if (rowSpacing.length > 1) {
+                  const avgSpacing = rowSpacing.reduce((a, b) => a + b, 0) / rowSpacing.length;
+                  const lastElement = rowElements[rowElements.length - 1];
+                  
+                  // Look for where spacing becomes inconsistent (table ends)
+                  for (let i = rowSpacing.length - 1; i >= 0; i--) {
+                    if (Math.abs(rowSpacing[i] - avgSpacing) > avgSpacing * 0.5) {
+                      // Found inconsistent spacing - table likely ends here
+                      tableBottomY = rowElements[i].bottom;
+                      break;
+                    }
+                  }
+                  
+                  // If no inconsistency found, use the last element
+                  if (tableBottomY === labelTop && lastElement) {
+                    tableBottomY = lastElement.bottom;
+                  }
+                  
+                  console.log(`🎯 Table analysis: avgSpacing=${avgSpacing.toFixed(1)}, tableBottom=${tableBottomY.toFixed(1)}`);
+                }
+              }
+              
+              // Calculate the bounding box of all related content within the column
+              let minX = Number.POSITIVE_INFINITY;
+              let minY = Number.POSITIVE_INFINITY;
+              let maxX = 0;
+              let maxY = 0;
+              
+              contentElements.forEach(el => {
+                const rect = el.getBoundingClientRect();
+                const elLeft = rect.left - layerRect.left;
+                const elTop = rect.top - layerRect.top;
+                const elRight = elLeft + rect.width;
+                const elBottom = elTop + rect.height;
+                
+                minX = Math.min(minX, elLeft);
+                minY = Math.min(minY, elTop);
+                maxX = Math.max(maxX, elRight);
+                maxY = Math.max(maxY, elBottom);
+              });
+              
+              // For tables, extend the bottom boundary significantly to capture full table
+              if (isTable) {
+                const detectedBottom = tableBottomY > labelTop ? tableBottomY : maxY;
+                // Extend bottom boundary by additional amount to ensure full table capture
+                const extendedBottom = detectedBottom + 100; // Add 100px more to bottom
+                maxY = Math.max(maxY, extendedBottom);
+                console.log(`🎯 Extended table bottom from ${detectedBottom} to ${extendedBottom}`);
+              }
+              
+              // Include the original label in the bounds
+              minX = Math.min(minX, labelLeft);
+              minY = Math.min(minY, labelTop);
+              maxX = Math.max(maxX, labelLeft + labelWidth);
+              maxY = Math.max(maxY, labelTop + labelHeight);
+              
+              // Constrain to column boundaries
+              minX = Math.max(columnStart + 10, minX);
+              maxX = Math.min(columnEnd - 10, maxX);
+              
+              console.log(`🎯 2-column content analysis: ${minX}, ${minY} to ${maxX}, ${maxY}`);
+              
+              return {
+                left: minX,
+                top: minY,
+                width: maxX - minX,
+                height: maxY - minY,
+                isLeftColumn
+              };
+            };
+            
+            const contentBounds = analyzeContentBounds();
+            let circleLeft, circleTop, circleWidth, circleHeight;
+            
+            if (contentBounds) {
+              // Use the analyzed content bounds with appropriate padding
+              const padding = isTable ? 15 : isFigure ? 20 : 10;
+              
+              circleLeft = Math.max(0, contentBounds.left - padding);
+              circleTop = Math.max(0, contentBounds.top - padding);
+              circleWidth = Math.min(layerRect.width - circleLeft - padding, 
+                                   contentBounds.width + padding * 2);
+              circleHeight = Math.min(layerRect.height - circleTop - padding,
+                                    contentBounds.height + padding * 2);
+              
+              console.log(`🎯 Using content-based bounds with ${padding}px padding`);
+            } else {
+              // Fallback to improved heuristic approach
+              console.log('🎯 Using fallback heuristic approach');
+              
+              if (isTable) {
+                // Tables: moderate width, extend down from label
+                const padding = 20;
+                circleLeft = Math.max(0, labelLeft - padding);
+                circleTop = Math.max(0, labelTop - padding / 2);
+                circleWidth = Math.min(layerRect.width - circleLeft - padding,
+                                     Math.max(labelWidth + padding * 4, 300));
+                circleHeight = Math.min(layerRect.height - circleTop - padding, 150);
+              } else if (isFigure) {
+                // Figures: more square, centered around label
+                const padding = 25;
+                const estimatedWidth = Math.max(labelWidth + padding * 4, 250);
+                const estimatedHeight = Math.max(100, estimatedWidth * 0.7);
+                
+                circleLeft = Math.max(0, labelLeft - estimatedWidth / 4);
+                circleTop = Math.max(0, labelTop - padding);
+                circleWidth = Math.min(layerRect.width - circleLeft - padding, estimatedWidth);
+                circleHeight = Math.min(layerRect.height - circleTop - padding, estimatedHeight);
+              } else {
+                // Generic: tight around label with minimal padding
+                const padding = 15;
+                circleLeft = Math.max(0, labelLeft - padding);
+                circleTop = Math.max(0, labelTop - padding);
+                circleWidth = Math.min(layerRect.width - circleLeft, labelWidth + padding * 2);
+                circleHeight = Math.min(layerRect.height - circleTop, labelHeight + padding * 2);
+              }
+            }
+            
+            console.log(`🎯 Circle bounds: ${circleLeft}, ${circleTop}, ${circleWidth}x${circleHeight}`);
+            
             drawCircleOnPage(first.pageIndex, {
-              left: targetLeft,
-              top: Math.min(targetTop, pageH - pad - targetHeight),
-              width: targetWidth,
-              height: Math.min(targetHeight, pageH - targetTop - pad),
+              left: circleLeft,
+              top: circleTop,
+              width: circleWidth,
+              height: circleHeight,
             });
-          } catch {}
+            
+            console.log(`🎯 Successfully circled ${label} on page ${first.pageIndex + 1}`);
+          } catch (error) {
+            console.error(`🎯 Error circling ${label}:`, error);
+          }
         }, 120);
       };
+      
       window.addEventListener('pdf-search-results', onResults as EventListener, { once: true });
+      // Clear existing circles before creating new ones (but only for circle operations)
       try { clearAllCircles(); } catch {}
+      
+      // Enhanced search with multiple variations of the label
+      const searchTerms = [label];
+      
+      // Add variations for better matching
+      if (label.toLowerCase().includes('table')) {
+        const num = label.match(/\d+/)?.[0];
+        if (num) {
+          searchTerms.push(`Table ${num}`);
+          searchTerms.push(`table ${num}`);
+          searchTerms.push(`TABLE ${num}`);
+        }
+      } else if (label.toLowerCase().includes('figure')) {
+        const num = label.match(/\d+/)?.[0];
+        if (num) {
+          searchTerms.push(`Figure ${num}`);
+          searchTerms.push(`figure ${num}`);
+          searchTerms.push(`FIGURE ${num}`);
+          searchTerms.push(`Fig. ${num}`);
+          searchTerms.push(`fig. ${num}`);
+        }
+      }
+      
+      console.log(`🎯 Searching for label variations:`, searchTerms);
+      
       window.dispatchEvent(new CustomEvent('pdf-search-request', {
-        detail: { requestId, keywords: label }
+        detail: { requestId, keywords: searchTerms }
       }));
+    };
+
+    // Handle quote highlighting from TutorAgent
+    const handleHighlightQuote = (event: any) => {
+      const { text, page } = event.detail || {};
+      console.log('🎯 PDF: Received highlight quote request:', { text, page });
+      console.log('🎯 PDF: Full event detail:', event.detail);
+      
+      if (!text || typeof text !== 'string') {
+        console.warn('🎯 PDF: Invalid quote text:', text);
+        return;
+      }
+
+      // Use the search functionality to highlight the quote
+      const requestId = `quote-highlight-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      
+      // Don't clear circles for quote highlighting - they can coexist
+      // clearAllCircles(); // Removed - let circles stay visible with quotes
+      console.log('🎯 PDF: Keeping circles visible during quote highlighting');
+      
+      // Add to highlight queue instead of immediate processing to prevent flashing
+      highlightQueueRef.current.push({
+        requestId,
+        keywords: [{ keyword: text.trim(), matchCase: false }],
+        timestamp: Date.now()
+      });
+      
+      // Process the queue
+      processHighlightQueue();
+
+      // If page is specified, navigate to that page
+      if (typeof page === 'number' && page > 0) {
+        const zeroBased = page - 1;
+        try {
+          if ((window as any).pdfJumpToPage) {
+            (window as any).pdfJumpToPage(page);
+          } else {
+            window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: zeroBased } }));
+          }
+        } catch (err) {
+          console.warn('🎯 PDF: Failed to navigate to page:', err);
+        }
+      }
     };
 
     const handleCircleTable = (event: any) => {
@@ -598,10 +1168,13 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     window.addEventListener('tutor-circle-table', handleCircleTable as EventListener);
     window.addEventListener('tutor-circle-figure', handleCircleFigure as EventListener);
     window.addEventListener('tutor-annotations-clear', handleClearAnnotations as EventListener);
+    window.addEventListener('tutor-highlight-quote', handleHighlightQuote as EventListener);
+    
     return () => {
       window.removeEventListener('tutor-circle-table', handleCircleTable as EventListener);
       window.removeEventListener('tutor-circle-figure', handleCircleFigure as EventListener);
       window.removeEventListener('tutor-annotations-clear', handleClearAnnotations as EventListener);
+      window.removeEventListener('tutor-highlight-quote', handleHighlightQuote as EventListener);
     };
   }, []);
 
@@ -615,12 +1188,22 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     if (hasNoKeywords) {
       try {
         searchPluginInstanceRef.current.clearHighlights();
+        // Also clear circles when clearing all highlights
+        clearAllCircles();
+        console.log("🔍 PDF: Cleared highlights and circles due to no keywords");
       } catch {}
     }
   }, [lastKeywordsRef.current]);
 
   return (
     <div ref={rootRef} className="w-full h-full">
+      <style>{`
+        /* Simple circle styling only */
+        .tutor-circle-annotation {
+          border: 3px solid #ef4444 !important;
+          box-shadow: 0 0 0 2px rgba(239,68,68,0.25) !important;
+        }
+      `}</style>
       <Worker workerUrl="/pdf.worker.js">
         <div style={{ height: '100%' }}>
           <Viewer
