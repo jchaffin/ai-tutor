@@ -291,8 +291,8 @@ export default function ChatInterface({
 
   // Handle citation research requests
   useEffect(() => {
-    const handleCitationResearch = async (event: CustomEvent) => {
-      const { citation, context, requestId } = event.detail || {};
+    const handleCitationResearch = (event: Event) => {
+      const { citation, context, requestId } = (event as CustomEvent).detail || {};
       console.log('📚 Citation research request received:', { citation, context, requestId });
       
       if (!citation) {
@@ -333,9 +333,9 @@ export default function ChatInterface({
       }
     };
 
-    window.addEventListener('tutor-citation-research', handleCitationResearch as EventListener);
+    window.addEventListener('tutor-citation-research', handleCitationResearch);
     return () => {
-      window.removeEventListener('tutor-citation-research', handleCitationResearch as EventListener);
+      window.removeEventListener('tutor-citation-research', handleCitationResearch);
     };
   }, [setMessages]);
 
