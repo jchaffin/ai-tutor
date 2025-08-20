@@ -44,6 +44,7 @@ export default function TutorPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [error, setError] = useState<string | null>(null)
   const [pdfContent, setPdfContent] = useState<string>('')
+  const [startNewSession, setStartNewSession] = useState<boolean>(false)
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -205,7 +206,8 @@ export default function TutorPage() {
         },
         body: JSON.stringify({
           message: content,
-          currentPage
+          currentPage,
+          newSession: startNewSession === true
         }),
       })
 
@@ -220,6 +222,8 @@ export default function TutorPage() {
           timestamp: new Date()
         }
         setMessages(prev => [...prev, assistantMessage])
+        // Reset the new session flag once used
+        if (startNewSession) setStartNewSession(false)
 
         // Navigate to page if specified
         if (data.navigateToPage) {
@@ -361,6 +365,7 @@ export default function TutorPage() {
                   onPageNavigation={setCurrentPage}
                   setMessages={setMessages}
                   documentId={documentId}
+                  onNewSession={() => setStartNewSession(true)}
                 />
               </TranscriptProvider>
             </EventProvider>

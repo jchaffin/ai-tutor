@@ -27,6 +27,7 @@ interface ChatInterfaceProps {
   currentPage?: number
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void
   documentId: string
+  onNewSession?: () => void
 }
 
 export default function ChatInterface({ 
@@ -39,7 +40,8 @@ export default function ChatInterface({
   pdfContent = '',
   currentPage = 1,
   setMessages,
-  documentId
+  documentId,
+  onNewSession
 }: ChatInterfaceProps) {
   const [inputMessage, setInputMessage] = useState('')
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('DISCONNECTED')
@@ -78,6 +80,28 @@ export default function ChatInterface({
   // Use session history handler to process realtime events
   const sessionHistoryHandler = useHandleSessionHistory()
 
+  // Helper to get all messages including transcript items
+  const getAllMessages = () => {
+    const allMessages = [...messages];
+    
+    // Add transcript items that aren't already in messages
+    transcriptItems.forEach(item => {
+      if (item.type === 'MESSAGE' && !item.isHidden && (item.role === 'user' || item.role === 'assistant')) {
+        const existingMessage = allMessages.find(msg => msg.id === (item as any).itemId);
+        if (!existingMessage && (item as any).title) {
+          allMessages.push({
+            id: (item as any).itemId || Date.now().toString(),
+            role: item.role as 'user' | 'assistant',
+            content: (item as any).title,
+            timestamp: new Date()
+          });
+        }
+      }
+    });
+    
+    return allMessages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  };
+
   // Fetch chat history
   const fetchChatHistory = async () => {
     try {
@@ -105,6 +129,22 @@ export default function ChatInterface({
       }
     } catch (error) {
       console.error('Error loading chat:', error);
+    }
+  };
+
+  // Delete a specific chat
+  const deleteChat = async (chatId: string, event: React.MouseEvent) => {
+    event.stopPropagation(); // Prevent loading the chat when clicking delete
+    try {
+      const response = await fetch(`/api/chat/${documentId}/history/${chatId}/delete`, {
+        method: 'DELETE'
+      });
+      if (response.ok) {
+        // Refresh the chat history to remove the deleted item
+        await fetchChatHistory();
+      }
+    } catch (error) {
+      console.error('Error deleting chat:', error);
     }
   };
 
@@ -438,26 +478,53 @@ export default function ChatInterface({
             onClick={async () => {
               try {
                 if (sessionStatus === 'CONNECTED') {
+                  // Archive current chat before disconnecting
+                  const allMessages = getAllMessages();
+                  if (allMessages.length > 0) {
+                    try {
+                      const response = await fetch('/api/chat/archive', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          documentId: documentId,
+                          messages: allMessages,
+                          timestamp: new Date().toISOString(),
+                        }),
+                      });
+                      if (!response.ok && process.env.NODE_ENV !== 'production') {
+                        console.error('❌ Failed to archive chat on disconnect');
+                      }
+                      try { await fetchChatHistory(); } catch {}
+                      setMessages([]);
+                      clearTranscript();
+                    } catch (e) {
+                      console.error('❌ Archive on disconnect failed:', e);
+                    }
+                  }
                   await disconnectFromRealtime();
                   return;
                 }
                 // Archive current chat to database if there are messages, then start a fresh session
-                if (messages.length > 0) {
+                const allMessages = getAllMessages();
+                if (allMessages.length > 0) {
                   const response = await fetch('/api/chat/archive', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                       documentId: documentId,
-                      messages: messages,
+                      messages: allMessages,
                       timestamp: new Date().toISOString()
                     }),
                   });
                   if (!response.ok && process.env.NODE_ENV !== 'production') {
                     console.error('❌ Failed to archive chat');
                   }
+                  // Refresh history immediately so the archived chat appears
+                  try { await fetchChatHistory(); } catch {}
                 }
                 setMessages([]);
                 clearTranscript();
+                try { onNewSession && onNewSession(); } catch {}
                 await connectToRealtime();
               } catch (error) {
                 console.error('❌ Toggle connect error:', error);
@@ -519,7 +586,7 @@ export default function ChatInterface({
                   <div
                     key={chat.id}
                     onClick={() => loadChat(chat.id)}
-                    className="p-3 mb-2 bg-white rounded-lg border cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-colors"
+                    className="p-3 mb-2 bg-white rounded-lg border cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-colors relative group"
                   >
                     <div className="text-sm font-medium text-gray-900">
                       {new Date(chat.timestamp).toLocaleDateString()}
@@ -530,6 +597,13 @@ export default function ChatInterface({
                     <div className="text-xs text-gray-400 mt-1">
                       {chat.messageCount} messages
                     </div>
+                    <button
+                      onClick={(e) => deleteChat(chat.id, e)}
+                      className="absolute top-2 right-2 w-5 h-5 flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Delete chat"
+                    >
+                      ×
+                    </button>
                   </div>
                 ))
               )}

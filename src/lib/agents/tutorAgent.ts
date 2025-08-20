@@ -46,9 +46,10 @@ CRITICAL: When the user asks about ANY topic, you MUST:
 1. **FIRST**: Check if the user is asking about a section by using highlight_section_content with their query
 2. **THEN**: Use search_document with a concise keyword/phrase from the question
 3. Jump to the first match and speak your explanation while that text is highlighted
-4. State the page number verbally as part of your answer
-5. Include a short quote (from the match excerpt) to back up your point
-6. **AUTOMATICALLY highlight any additional sections, tables, or content you mention in your response**
+4. **IMMEDIATELY use highlight_quote** to highlight the exact text you're referencing in your answer
+5. State the page number verbally as part of your answer
+6. Include a short quote (from the match excerpt) to back up your point
+7. **AUTOMATICALLY highlight any additional sections, tables, or content you mention in your response**
 
 EXAMPLE: If the user says "tell me about interhead gating", IMMEDIATELY:
 - Call highlight_section_content with "interhead gating" to check if it's a section title
@@ -56,6 +57,11 @@ EXAMPLE: If the user says "tell me about interhead gating", IMMEDIATELY:
 - Then use search_document with "interhead gating" to highlight specific text matches
 - The viewer will highlight matches and jump to the first
 - As you speak about "baselines" or "Table 1", automatically highlight those too
+
+SECTION CIRCLING: If the user asks about something that matches a section title (like "Conclusion" matching "Conclusions"), you MUST:
+- Use circle_table or circle_figure for "Table X" or "Figure X" references
+- For section titles, use highlight_section_content which will circle the section title
+- Be flexible with matching: "conclusion" should match "Conclusions", "intro" should match "Introduction", etc.
 
 You MUST use highlight_section_content FIRST for every content question to check if it's a section title, then use search_document for specific text highlighting.
 Start your answer with something like: "On page {page}, it says, \"{short quote}\" ..."
@@ -112,7 +118,7 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             = [];
 
           if (typeof window !== 'undefined') {
-            // Clear previous search marks and temporary annotations
+            // Clear previous search marks and circles when asking new questions
             window.dispatchEvent(new CustomEvent('pdf-clear-highlights'));
             window.dispatchEvent(new CustomEvent('tutor-annotations-clear'));
             const waitForResults = new Promise<void>((resolve) => {
@@ -213,29 +219,8 @@ Remember: You're having a voice conversation, so keep responses natural and spok
                 else window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: first.pageIndex } }));
               } catch {}
 
-              // Auto-advance through ALL relevant pages while speaking
-              const defaults = { intervalMs: 3500, maxSteps: Number.POSITIVE_INFINITY, enabled: true } as any;
-              const cfg = (window as any).__pdfAutoAdvance ?? defaults;
-              const enabled = cfg.enabled !== false;
-              if (enabled) {
-                const intervalMs = Math.max(1200, Number(cfg.intervalMs) || defaults.intervalMs);
-                const maxSteps = Math.max(1, Math.min(Number(cfg.maxSteps) || steps.length, steps.length));
-                const token = `adv-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                (window as any).__pdfAutoAdvanceToken = token;
-                for (let i = 1; i < maxSteps; i++) {
-                  const stepIndex = i;
-                  setTimeout(() => {
-                    try {
-                      if ((window as any).__pdfAutoAdvanceToken !== token) return;
-                      const s = steps[stepIndex];
-                      if (!s) return;
-                      if ((window as any).pdfJumpToPage) (window as any).pdfJumpToPage(s.pageIndex + 1);
-                      else window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: s.pageIndex } }));
-                      // Avoid fragile jumpToMatch; highlights remain visible from prior search
-                    } catch {}
-                  }, i * intervalMs);
-                }
-              }
+              // Stay on the first relevant page instead of auto-advancing
+              // Auto-advance is disabled to keep focus on the current reference
             }
           }
 
@@ -284,12 +269,37 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             const outline: Array<{ title: string; pageIndex: number }> = (window as any).__pdfOutline || [];
             const searchTerm = term.toLowerCase().trim();
             
-            // Find exact or partial section matches
-            const sectionMatch = outline.find(s => 
-              s.title.toLowerCase().includes(searchTerm) ||
-              searchTerm.includes(s.title.toLowerCase()) ||
-              s.title.toLowerCase() === searchTerm
-            );
+            // Find exact or partial section matches with flexible matching
+            const sectionMatch = outline.find(s => {
+              const sectionTitle = s.title.toLowerCase().trim();
+              const userTerm = searchTerm.toLowerCase().trim();
+              
+              // Exact match
+              if (sectionTitle === userTerm) return true;
+              
+              // Bidirectional contains
+              if (sectionTitle.includes(userTerm) || userTerm.includes(sectionTitle)) return true;
+              
+              // Handle common variations
+              const variations = {
+                'conclusion': ['conclusions', 'concluding', 'summary'],
+                'intro': ['introduction', 'introductory'],
+                'method': ['methods', 'methodology'],
+                'result': ['results'],
+                'experiment': ['experiments', 'experimental'],
+                'discussion': ['discussions'],
+                'reference': ['references', 'bibliography'],
+                'appendix': ['appendices']
+              };
+              
+              // Check if user term matches any variation
+              for (const [key, values] of Object.entries(variations)) {
+                if (userTerm === key && values.some(v => sectionTitle.includes(v))) return true;
+                if (values.includes(userTerm) && sectionTitle.includes(key)) return true;
+              }
+              
+              return false;
+            });
             
             if (sectionMatch) {
               console.log(`🎯 HIGHLIGHTING ENTIRE SECTION: "${sectionMatch.title}" on page ${sectionMatch.pageIndex + 1}`);
@@ -349,7 +359,6 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             return { success: false, message: 'Missing table label' };
           }
           if (typeof window !== 'undefined') {
-            try { window.dispatchEvent(new CustomEvent('tutor-annotations-clear')); } catch {}
             window.dispatchEvent(new CustomEvent('tutor-circle-table', { detail: { label } }));
             return { success: true, label, message: `Circling ${label}` };
           }
@@ -372,7 +381,6 @@ Remember: You're having a voice conversation, so keep responses natural and spok
           const label = String(input?.label || '').trim();
           if (!label) return { success: false, message: 'Missing figure label' };
           if (typeof window !== 'undefined') {
-            try { window.dispatchEvent(new CustomEvent('tutor-annotations-clear')); } catch {}
             window.dispatchEvent(new CustomEvent('tutor-circle-figure', { detail: { label } }));
             return { success: true, label, message: `Circling ${label}` };
           }
@@ -526,6 +534,43 @@ Remember: You're having a voice conversation, so keep responses natural and spok
       }),
 
       tool({
+        name: 'highlight_quote',
+        description: 'Highlight an exact quote from the document that you are referencing in your response',
+        parameters: {
+          type: 'object',
+          properties: {
+            quote: {
+              type: 'string',
+              description: 'The exact text from the document to highlight (must match exactly)'
+            },
+            page: {
+              type: 'number',
+              description: 'The page number where this quote appears'
+            }
+          },
+          required: ['quote'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          const { quote, page } = input;
+          if (!quote || typeof quote !== 'string') {
+            return { success: false, message: 'Missing or invalid quote text' };
+          }
+          
+          if (typeof window !== 'undefined') {
+            const normalized = quote.replace(/\s+/g, ' ').trim();
+            if (normalized.length >= 8) {
+              window.dispatchEvent(new CustomEvent('tutor-highlight-quote', {
+                detail: { text: normalized, page }
+              }));
+              return { success: true, quote: normalized, page, message: `Highlighted quote: "${normalized.substring(0, 50)}..."` };
+            }
+          }
+          return { success: false, message: 'Quote too short or not in browser context' };
+        }
+      }),
+
+      tool({
         name: 'create_annotation',
         description: 'Create a visual annotation on the PDF',
         parameters: {
@@ -592,6 +637,16 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             window.dispatchEvent(new CustomEvent('tutor-annotation-created', {
               detail: { annotation }
             }));
+
+            // If a quote string is provided, try to highlight the exact reference text
+            if (text && typeof text === 'string') {
+              const normalized = text.replace(/\s+/g, ' ').trim();
+              if (normalized.length >= 8) {
+                window.dispatchEvent(new CustomEvent('tutor-highlight-quote', {
+                  detail: { text: normalized, page }
+                }));
+              }
+            }
           }
           
           return { 
@@ -605,7 +660,7 @@ Remember: You're having a voice conversation, so keep responses natural and spok
       tool({
         name: 'list_sections',
         description: 'Return the list of detected document sections (title and page) from the viewer',
-        parameters: { type: 'object', properties: {}, additionalProperties: false },
+        parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
         execute: async () => {
           if (typeof window !== 'undefined') {
             const outline = (window as any).__pdfOutline || [];

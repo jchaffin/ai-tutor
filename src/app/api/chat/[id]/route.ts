@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
+import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { openai } from '@/lib/openai'
 import { extractTextFromPDF } from '@/lib/pdfUtils'
@@ -13,7 +12,7 @@ export async function GET(
 ) {
   const { id } = await params
   try {
-    const session = await getServerSession(authOptions)
+    const session = await auth()
     
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -79,13 +78,13 @@ export async function POST(
 ) {
   const { id } = await params
   try {
-    const session = await getServerSession(authOptions)
+    const session = await auth()
     
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { message, currentPage } = await request.json()
+    const { message, currentPage, newSession } = await request.json()
 
     // Get document
     const document = await prisma.document.findFirst({
@@ -99,15 +98,16 @@ export async function POST(
       return NextResponse.json({ error: 'Document not found' }, { status: 404 })
     }
 
-    // Get or create chat session
+    // Get most recent chat session, or create a new one when explicitly requested
     let chatSession = await prisma.chatSession.findFirst({
       where: {
         documentId: id,
         userId: session.user.id
-      }
+      },
+      orderBy: { createdAt: 'desc' }
     })
 
-    if (!chatSession) {
+    if (!chatSession || newSession === true) {
       chatSession = await prisma.chatSession.create({
         data: {
           documentId: id,

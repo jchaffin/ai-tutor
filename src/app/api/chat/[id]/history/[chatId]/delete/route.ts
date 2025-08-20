@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 
-export async function GET(
+export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string; chatId: string }> }
 ) {
@@ -13,35 +13,27 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Ensure the chat session belongs to the user and document
-    const chat = await prisma.chatSession.findFirst({
+    // Verify the chat session belongs to the user and document
+    const chatSession = await prisma.chatSession.findFirst({
       where: {
         id: chatId,
         documentId: id,
         userId: session.user.id,
-      },
-      include: {
-        messages: {
-          orderBy: { createdAt: 'asc' },
-        },
-      },
+      }
     })
 
-    if (!chat) {
+    if (!chatSession) {
       return NextResponse.json({ error: 'Chat not found' }, { status: 404 })
     }
 
-    const messages = chat.messages.map((m) => ({
-      id: m.id,
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-      timestamp: m.createdAt,
-    }))
+    // Delete the chat session (messages will be cascade deleted)
+    await prisma.chatSession.delete({
+      where: { id: chatId }
+    })
 
-    return NextResponse.json({ messages })
+    return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('Error fetching chat messages:', err)
+    console.error('Error deleting chat:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
-

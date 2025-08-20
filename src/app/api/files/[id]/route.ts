@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
+import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
@@ -11,7 +10,7 @@ export async function GET(
 ) {
   const { id } = await params
   try {
-    const session = await getServerSession(authOptions)
+    const session = await auth()
     
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -32,11 +31,15 @@ export async function GET(
     const filePath = join(process.cwd(), document.filepath)
     const fileBuffer = await readFile(filePath)
 
-    // Return file with appropriate headers
-    return new NextResponse(fileBuffer as ArrayBuffer, {
+    // Return file with appropriate headers (convert Buffer → ArrayBuffer)
+    const ab = fileBuffer.buffer.slice(
+      fileBuffer.byteOffset,
+      fileBuffer.byteOffset + fileBuffer.byteLength
+    ) as ArrayBuffer
+    const blob = new Blob([ab], { type: document.mimeType })
+    return new NextResponse(blob, {
       headers: {
         'Content-Type': document.mimeType,
-        'Content-Length': document.size.toString(),
         'Content-Disposition': `inline; filename="${document.filename}"`,
       },
     })
