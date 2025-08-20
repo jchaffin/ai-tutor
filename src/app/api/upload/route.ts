@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { put } from '@vercel/blob'
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 import { randomUUID } from 'crypto'
 
 export async function POST(request: NextRequest) {
@@ -27,6 +30,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'File size exceeds 10MB limit' }, { status: 400 })
     }
 
+    if (!process.env.BLOB_READ_WRITE_TOKEN) {
+      return NextResponse.json({ error: 'Storage not configured (missing BLOB_READ_WRITE_TOKEN)' }, { status: 500 })
+    }
+
     const arrayBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(arrayBuffer)
 
@@ -36,8 +43,9 @@ export async function POST(request: NextRequest) {
 
     // Upload to Vercel Blob
     const blob = await put(uniqueFilename, buffer, {
-      access: 'authenticated',
+      access: 'public',
       contentType: file.type,
+      token: process.env.BLOB_READ_WRITE_TOKEN,
     })
 
     // Save document metadata to database
