@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Viewer, Worker } from '@react-pdf-viewer/core';
+import { Viewer, Worker, SpecialZoomLevel } from '@react-pdf-viewer/core';
 import { defaultLayoutPlugin } from '@react-pdf-viewer/default-layout';
 import { searchPlugin, SingleKeyword, Match } from '@react-pdf-viewer/search';
 import { pageNavigationPlugin } from '@react-pdf-viewer/page-navigation';
@@ -1530,6 +1530,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         <div style={{ height: '100%' }}>
           <Viewer
             fileUrl={fileUrl}
+            defaultScale={SpecialZoomLevel.ActualSize}
             plugins={[defaultLayoutPluginInstance, pageNavigationPluginInstance, searchPluginInstance]}
             onDocumentLoad={(e) => {
               setIsDocLoaded(true);

@@ -175,17 +175,17 @@ export async function ocrDetectTableBoundsFromLayer(
         // Define region of interest (below/around the label) if anchor provided
         let roiX = 0, roiY = 0, roiW = pdfCanvas.width, roiH = pdfCanvas.height;
         if (anchor) {
-          const padX = Math.max(30, Math.round(anchor.width * 0.75));
-          const padTop = 10;
-          const padBottom = Math.max(200, Math.round(pageRect.height * 0.45));
+          // Preserve current left edge; only expand to the right.
+          // Vertically, start just BELOW the anchor to avoid circling the caption.
+          const padBelow = 8;
+          const padBottom = Math.max(240, Math.round(pageRect.height * 0.55));
           const ax = toCanvasX(anchor.left);
           const ay = toCanvasY(anchor.top);
-          const aw = toCanvasX(anchor.left + anchor.width) - ax;
           const ah = toCanvasY(anchor.top + anchor.height) - ay;
-          roiX = Math.max(0, ax - padX);
-          roiW = Math.min(pdfCanvas.width - roiX, aw + padX * 2);
-          roiY = Math.max(0, ay + ah - padTop);
-          roiH = Math.min(pdfCanvas.height - roiY, padBottom + Math.round(ah * 2));
+          roiX = Math.max(0, ax);
+          roiW = pdfCanvas.width - roiX;
+          roiY = Math.max(0, ay + ah + padBelow);
+          roiH = Math.min(pdfCanvas.height - roiY, padBottom);
         }
 
         const imageData = ctx.getImageData(roiX, roiY, roiW, roiH);
@@ -193,11 +193,22 @@ export async function ocrDetectTableBoundsFromLayer(
         if (tableBox) {
           const scaleX = pageRect.width / pdfCanvas.width;
           const scaleY = pageRect.height / pdfCanvas.height;
+          let left = (roiX + tableBox.left) * scaleX;
+          let top = (roiY + tableBox.top) * scaleY;
+          let right = (roiX + tableBox.right) * scaleX;
+          let bottom = (roiY + tableBox.bottom) * scaleY;
+          if (anchor) {
+            // Lock left edge to current column start; let OCR decide top/bottom.
+            const minTop = anchor.top + anchor.height + 6;
+            left = anchor.left;
+            top = Math.max(top, minTop);
+            right = Math.min(pageRect.width, Math.max(right, anchor.left + anchor.width));
+          }
           return {
-            left: (roiX + tableBox.left) * scaleX,
-            top: (roiY + tableBox.top) * scaleY,
-            width: (tableBox.right - tableBox.left) * scaleX,
-            height: (tableBox.bottom - tableBox.top) * scaleY,
+            left,
+            top,
+            width: Math.max(0, right - left),
+            height: Math.max(0, bottom - top),
           };
         }
       }
@@ -224,17 +235,17 @@ export async function ocrDetectTableBoundsFromLayer(
   const toCanvasY2 = (y: number) => Math.max(0, Math.min(tempCanvas.height, Math.round((y / pageRect.height) * tempCanvas.height)));
   let roiX2 = 0, roiY2 = 0, roiW2 = tempCanvas.width, roiH2 = tempCanvas.height;
   if (anchor) {
-    const padX = Math.max(30, Math.round(anchor.width * 0.75));
-    const padTop = 10;
-    const padBottom = Math.max(200, Math.round(pageRect.height * 0.45));
+    // Preserve current left edge; only expand to the right.
+    // Vertically, start just BELOW the anchor to avoid circling the caption.
+    const padBelow = 8;
+    const padBottom = Math.max(240, Math.round(pageRect.height * 0.55));
     const ax = toCanvasX2(anchor.left);
     const ay = toCanvasY2(anchor.top);
-    const aw = toCanvasX2(anchor.left + anchor.width) - ax;
     const ah = toCanvasY2(anchor.top + anchor.height) - ay;
-    roiX2 = Math.max(0, ax - padX);
-    roiW2 = Math.min(tempCanvas.width - roiX2, aw + padX * 2);
-    roiY2 = Math.max(0, ay + ah - padTop);
-    roiH2 = Math.min(tempCanvas.height - roiY2, padBottom + Math.round(ah * 2));
+    roiX2 = Math.max(0, ax);
+    roiW2 = tempCanvas.width - roiX2;
+    roiY2 = Math.max(0, ay + ah + padBelow);
+    roiH2 = Math.min(tempCanvas.height - roiY2, padBottom);
   }
 
   const imageData = tempCtx.getImageData(roiX2, roiY2, roiW2, roiH2);
@@ -243,11 +254,21 @@ export async function ocrDetectTableBoundsFromLayer(
 
   const scaleX = pageRect.width / tempCanvas.width;
   const scaleY = pageRect.height / tempCanvas.height;
+  let left = (roiX2 + tableBox.left) * scaleX;
+  let top = (roiY2 + tableBox.top) * scaleY;
+  let right = (roiX2 + tableBox.right) * scaleX;
+  let bottom = (roiY2 + tableBox.bottom) * scaleY;
+  if (anchor) {
+    const minTop = anchor.top + anchor.height + 6;
+    left = anchor.left; // keep left fixed
+    top = Math.max(top, minTop); // ensure we don't select caption area
+    right = Math.min(pageRect.width, Math.max(right, anchor.left + anchor.width));
+  }
   return {
-    left: (roiX2 + tableBox.left) * scaleX,
-    top: (roiY2 + tableBox.top) * scaleY,
-    width: (tableBox.right - tableBox.left) * scaleX,
-    height: (tableBox.bottom - tableBox.top) * scaleY,
+    left,
+    top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
   };
 }
 
