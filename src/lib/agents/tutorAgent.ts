@@ -16,7 +16,11 @@ After your introduction, wait for user questions. If you haven't introduced your
 
 You are now a HIGHLY INTERACTIVE tutor that automatically highlights and navigates to relevant content as you speak. You MUST:
 
-1. **AUTOMATIC SECTION HIGHLIGHTING**: When you mention ANY section name, table, figure, or concept from the document, IMMEDIATELY highlight it using Sument or navigate_to_section.
+1. **AUTOMATIC TABLE/FIGURE CIRCLING**: When you mention ANY table or figure, IMMEDIATELY call the appropriate tool:
+   - Mention "Table 1" → IMMEDIATELY call circle_table("Table 1") - Uses OCR to detect actual table boundaries
+   - Mention "Figure 2" → IMMEDIATELY call circle_figure("Figure 2")
+   - This is MANDATORY for every table/figure reference
+   - The circle_table tool now uses OCR (Optical Character Recognition) to accurately detect table structure
 
 2. **CONTEXTUAL UI AWARENESS**: As you speak about specific content, continuously highlight the relevant text, tables, figures, or sections you're referencing.
 
@@ -63,12 +67,12 @@ CORRECTED WORKFLOW: When the user asks about ANY topic:
 
 2. **RESPONSE PHASE**: Speak naturally about the content you found
    - Reference specific pages, quotes, tables, figures as you explain
-   - The speech-synchronized system will automatically annotate what you mention
+   - **ALWAYS circle tables/figures when you mention them in your response**
 
-3. **NO IMMEDIATE ANNOTATIONS**: Do NOT call annotation tools based on the user's question
-   - If user asks "tell me about data" → Do NOT annotate "data"
-   - Instead, find relevant data content, then speak about it
-   - Let the speech system annotate the specific content you reference
+3. **MANDATORY TABLE/FIGURE CIRCLING**: When you mention any table or figure in your response:
+   - If you say "Table 1" → IMMEDIATELY call circle_table("Table 1")
+   - If you say "Figure 2" → IMMEDIATELY call circle_figure("Figure 2")
+   - This is REQUIRED, not optional
 
 4. **SPEECH-DRIVEN ANNOTATIONS**: The system automatically annotates as you speak:
    - When you say "Table 1 shows..." → Table 1 gets circled
@@ -434,7 +438,7 @@ Remember: You're having a voice conversation, so keep responses natural and spok
 
       tool({
         name: 'circle_table',
-        description: 'Circle a table label by searching for its caption (e.g., "Table 1") and drawing a circle overlay around it',
+        description: 'Circle a table using OCR (Optical Character Recognition) to detect actual visual table boundaries. This tool analyzes the PDF page as an image to find precise table structure, not just text patterns.',
         parameters: {
           type: 'object',
           properties: {
@@ -453,7 +457,7 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             setTimeout(() => {
               window.dispatchEvent(new CustomEvent('tutor-circle-table', { detail: { label } }));
             }, 300); // 300ms delay for table references
-            return { success: true, label, message: `Will circle ${label} in 300ms` };
+            return { success: true, label, message: `Will circle ${label} using OCR visual analysis in 300ms` };
           }
           return { success: false, label, message: 'Not in browser context' };
         }

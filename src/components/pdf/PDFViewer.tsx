@@ -5,6 +5,8 @@ import { Viewer, Worker } from '@react-pdf-viewer/core';
 import { defaultLayoutPlugin } from '@react-pdf-viewer/default-layout';
 import { searchPlugin, SingleKeyword, Match } from '@react-pdf-viewer/search';
 import { pageNavigationPlugin } from '@react-pdf-viewer/page-navigation';
+// Removed unused Tesseract import
+import { ocrDetectTableBoundsFromLayer, analyzeContentBoundsAroundLabel } from '@/lib/pdfClient';
 
 // Import styles
 import '@react-pdf-viewer/core/lib/styles/index.css';
@@ -98,9 +100,80 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     setTimeout(() => scrollToPageIndex(zeroBasedIndex, attempts - 1), 150);
   };
 
-  // Expose highlight API to global window for agent access
+  // Expose circle table function globally for easy testing
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      // Define the function that directly calls OCR detection
+      const circleTable = async (label: string) => {
+        console.log(`🎯 Manual circle table call: ${label}`);
+        
+        try {
+          // Find the page with the table first
+          const requestId = `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          const onResults = (e: any) => {
+            if (e?.detail?.requestId !== requestId) return;
+            window.removeEventListener('pdf-search-results', onResults as EventListener);
+            const results = (e?.detail?.results || []) as Array<{ pageIndex: number; matchIndex: number }>;
+            if (!results.length) {
+              console.log(`🎯 No search results found for label: ${label}`);
+              return;
+            }
+            
+            const first = results[0];
+            console.log(`🎯 Found label on page ${first.pageIndex + 1}, starting OCR analysis...`);
+            
+            // Perform OCR-based table detection directly
+            performOCRTableDetection(first.pageIndex, label)
+              .then((bounds) => {
+                if (bounds) {
+                  drawCircleOnPage(first.pageIndex, bounds);
+                } else {
+                  console.log('🎯 OCR returned no bounds; falling back to DOM analysis');
+                  try { circleByLabel(label); } catch {}
+                }
+              })
+              .catch(() => {
+                try { circleByLabel(label); } catch {}
+              });
+          };
+          
+          window.addEventListener('pdf-search-results', onResults as EventListener);
+          window.dispatchEvent(new CustomEvent('pdf-search-request', { 
+            detail: { 
+              requestId,
+              keywords: [{ keyword: label, matchCase: false }]
+            } 
+          }));
+          
+        } catch (error) {
+          console.error('🎯 Error in manual circleTable:', error);
+          // Fallback to old method
+          circleByLabel(label);
+        }
+      };
+
+      // Expose it globally
+      (window as any).circleTable = circleTable;
+      
+      // Also expose a debug function to test OCR on current page
+      (window as any).testOCR = async (pageIndex: number = 0, label: string) => {
+        console.log(`🎯 Testing OCR on page ${pageIndex + 1} for label: ${label}`);
+        try {
+          const bounds = await performOCRTableDetection(pageIndex, label);
+          if (bounds) {
+            drawCircleOnPage(pageIndex, bounds);
+          } else {
+            console.log('🎯 OCR returned no bounds; falling back to DOM analysis');
+            try { circleByLabel(label); } catch {}
+          }
+        } catch {
+          try { circleByLabel(label); } catch {}
+        }
+      };
+      
+      console.log('🎯 circleTable function exposed globally with direct OCR');
+      console.log('🎯 testOCR(pageIndex) function also available for debugging');
+
       window.pdfHighlighter = {
         addHighlight: (highlight: any) => {
           console.log("🎯 PDF API: Adding highlight:", highlight);
@@ -231,9 +304,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     // This useEffect is no longer needed as we removed custom highlighting
   }, []);
 
-  // REMOVED: Custom highlight render functions that were creating random boxes
-  // We now only use searchPlugin's native text highlighting
-
   // Create plugins (stable instance) with simple, clean highlighting
   const searchPluginInstanceRef = useRef(searchPlugin({ 
     enableShortcuts: true,
@@ -278,8 +348,105 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     document.querySelectorAll('.tutor-circle-overlay-container').forEach((el) => el.remove());
   };
 
-  // REMOVED: highlightPlugin that was creating random boxes
-  // Only use searchPlugin's native highlighting for actual text content
+  // Removed in-component detectTableBoundaries; imported from '@/lib/pdfClient'
+
+  // OCR-based table detection using canvas rendering of the page layer
+  const performOCRTableDetection = async (pageIndex: number, label: string): Promise<{ left: number; top: number; width: number; height: number } | null> => {
+    try {
+      const layer = document.querySelector(`[data-testid="core__page-layer-${pageIndex}"]`) as HTMLElement | null;
+      if (!layer) return null;
+      const finalBounds = await ocrDetectTableBoundsFromLayer(layer);
+      if (!finalBounds) return null;
+      return finalBounds;
+    } catch (error) {
+      console.error('🎯 OCR Table Detection Error:', error);
+      return null;
+    }
+  };
+
+  // Wait for a page layer to be present in the DOM (react-pdf-viewer virtualizes pages)
+  const waitForPageLayer = async (pageIndex: number, attempts: number = 15, delayMs: number = 150): Promise<HTMLElement | null> => {
+    for (let i = 0; i < attempts; i++) {
+      const layer = document.querySelector(`[data-testid="core__page-layer-${pageIndex}"]`) as HTMLElement | null;
+      if (layer) return layer;
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+    return null;
+  };
+
+  // Search for a label and draw a circle around nearby content using PDF/text/DOM heuristics
+  const circleByLabel = (label: string) => {
+    const requestId = `circle-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const onResults = (e: any) => {
+      if (e?.detail?.requestId !== requestId) return;
+      window.removeEventListener('pdf-search-results', onResults as EventListener);
+      const results = (e?.detail?.results || []) as Array<{ pageIndex: number; matchIndex: number }>; if (!results.length) return;
+      const first = results[0];
+      setTimeout(async () => {
+        try {
+          const layer = document.querySelector(`[data-testid="core__page-layer-${first.pageIndex}"]`) as HTMLElement | null;
+          if (!layer) return;
+          // Removed PDF.js text-boundary shortcut; proceed with DOM-based analysis below
+          const hlEls = layer.querySelectorAll('.rpv-search__highlight');
+          if (!hlEls || hlEls.length === 0) return;
+          const layerRect = layer.getBoundingClientRect();
+          let minLeft = Number.POSITIVE_INFINITY, minTop = Number.POSITIVE_INFINITY, maxRight = 0, maxBottom = 0;
+          hlEls.forEach((n) => { const r = (n as HTMLElement).getBoundingClientRect(); minLeft = Math.min(minLeft, r.left); minTop = Math.min(minTop, r.top); maxRight = Math.max(maxRight, r.right); maxBottom = Math.max(maxBottom, r.bottom); });
+          if (!isFinite(minLeft) || !isFinite(minTop)) return;
+          const labelLeft = minLeft - layerRect.left;
+          const labelTop = minTop - layerRect.top;
+          const labelWidth = maxRight - minLeft;
+          const labelHeight = maxBottom - minTop;
+          const isTable = /table/i.test(label);
+          const isFigure = /figure/i.test(label);
+          const contentBounds = analyzeContentBoundsAroundLabel(layer, new DOMRect(minLeft, minTop, maxRight - minLeft, maxBottom - minTop), isTable ? 'table' : (isFigure ? 'figure' : 'generic'));
+          const layerRect2 = layer.getBoundingClientRect();
+          let circleLeft: number, circleTop: number, circleWidth: number, circleHeight: number;
+          if (contentBounds) {
+            const padding = /table/i.test(label) ? 15 : /figure/i.test(label) ? 20 : 10;
+            circleLeft = Math.max(0, contentBounds.left - padding);
+            circleTop = Math.max(0, contentBounds.top - padding);
+            circleWidth = Math.min(layerRect2.width - circleLeft - padding, contentBounds.width + padding * 2);
+            circleHeight = Math.min(layerRect2.height - circleTop - padding, contentBounds.height + padding * 2);
+          } else {
+            if (/table/i.test(label)) {
+              const padding = 20;
+              circleLeft = Math.max(0, labelLeft - padding);
+              circleTop = Math.max(0, labelTop - padding / 2);
+              circleWidth = Math.min(layerRect2.width - circleLeft - padding, Math.max(labelWidth + padding * 4, 300));
+              circleHeight = Math.min(layerRect2.height - circleTop - padding, 150);
+            } else if (/figure/i.test(label)) {
+              const padding = 25;
+              const estimatedWidth = Math.max(labelWidth + padding * 4, 250);
+              const estimatedHeight = Math.max(100, estimatedWidth * 0.7);
+              circleLeft = Math.max(0, labelLeft - estimatedWidth / 4);
+              circleTop = Math.max(0, labelTop - padding);
+              circleWidth = Math.min(layerRect2.width - circleLeft - padding, estimatedWidth);
+              circleHeight = Math.min(layerRect2.height - circleTop - padding, estimatedHeight);
+            } else {
+              const padding = 15;
+              circleLeft = Math.max(0, labelLeft - padding);
+              circleTop = Math.max(0, labelTop - padding);
+              circleWidth = Math.min(layerRect2.width - circleLeft, labelWidth + padding * 2);
+              circleHeight = Math.min(layerRect2.height - circleTop, labelHeight + padding * 2);
+            }
+          }
+          drawCircleOnPage(first.pageIndex, { left: circleLeft, top: circleTop, width: circleWidth, height: circleHeight });
+        } catch (error) {
+          console.error(`🎯 Error circling ${label}:`, error);
+        }
+      }, 120);
+    };
+    window.addEventListener('pdf-search-results', onResults as EventListener, { once: true });
+    try { clearAllCircles(); } catch {}
+    const searchTerms = [label];
+    if (label.toLowerCase().includes('table')) {
+      const num = label.match(/\d+/)?.[0]; if (num) { searchTerms.push(`Table ${num}`); searchTerms.push(`table ${num}`); searchTerms.push(`TABLE ${num}`); }
+    } else if (label.toLowerCase().includes('figure')) {
+      const num = label.match(/\d+/)?.[0]; if (num) { searchTerms.push(`Figure ${num}`); searchTerms.push(`figure ${num}`); searchTerms.push(`FIGURE ${num}`); searchTerms.push(`Fig. ${num}`); searchTerms.push(`fig. ${num}`); }
+    }
+    window.dispatchEvent(new CustomEvent('pdf-search-request', { detail: { requestId, keywords: searchTerms } }));
+  };
 
   const defaultLayoutPluginInstance = useRef(defaultLayoutPlugin({
     sidebarTabs: (defaultTabs) => [
@@ -669,30 +836,55 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         const labelY = labelItem.transform[5]; // Y coordinate
         const labelX = labelItem.transform[4]; // X coordinate
         
-        // Look for structured content below the label
+        // Look for structured content below the label - but be very precise
+        let foundTableStart = false;
+        let tableStartIndex = -1;
+        
         for (let i = labelIndex + 1; i < textContent.items.length; i++) {
           const item = textContent.items[i];
           const itemY = item.transform[5];
           const itemX = item.transform[4];
           
-          // Stop if we've moved too far down - tables are usually much closer
-          if (labelY - itemY > 100) break; // Much more restrictive: only 100 units below label
+          // Stop if we've moved too far down
+          if (labelY - itemY > 400) break;
           
-          // Much more restrictive: Only include actual table content
-          if (item.str && (
-            /^\d+\.?\d*$/.test(item.str.trim()) || // Pure numbers (table data)
-            /^[A-Z][a-z]+$/.test(item.str.trim()) || // Model names like "AED", "Transformer"
-            item.str.includes('M') || // Parameter counts like "116.2M"
-            /^[a-z]+$/.test(item.str.trim()) && item.str.length < 10 || // Short lowercase (like "clean", "test")
-            Math.abs(itemX - labelX) < 150 // Much closer horizontal alignment for table cells
-          )) {
-            tableItems.push({
-              text: item.str,
-              x: itemX,
-              y: itemY,
-              width: item.width || 0,
-              height: item.height || 0
-            });
+          // Look for the start of actual table data (layout-based, not content-based)
+          if (!foundTableStart) {
+            if (item.str) {
+              // Heuristic: detect a "row" by finding multiple items with nearly identical Y within next items
+              const currentY = itemY;
+              let sameRowCount = 0;
+              for (let j = i; j < Math.min(textContent.items.length, i + 20); j++) {
+                const jItem = textContent.items[j];
+                if (!jItem?.str) continue;
+                const dy = Math.abs(currentY - jItem.transform[5]);
+                if (dy <= 2.5) sameRowCount++;
+              }
+              if (sameRowCount >= 3) {
+                foundTableStart = true;
+                tableStartIndex = i;
+                console.log(`🎯 Found table start (layout) at item ${i}: "${item.str}" with ${sameRowCount} items on row`);
+              }
+            }
+            continue;
+          }
+          
+          // Now collect only actual table data (generic heuristics)
+          if (item.str) {
+            const text = String(item.str).trim();
+            const isShort = text.length > 0 && text.length <= 48;
+            const hasDataChars = /[\d%]/.test(text);
+            const fewWords = text.split(/\s+/).filter(Boolean).length <= 8;
+            const looksCell = isShort && (hasDataChars || fewWords) && !(/[.!?]{2,}/.test(text));
+            if (looksCell) {
+              tableItems.push({
+                text: item.str,
+                x: itemX,
+                y: itemY,
+                width: item.width || 0,
+                height: item.height || 0
+              });
+            }
           }
         }
         
@@ -748,37 +940,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
               return;
             }
 
-            // Try PDF structure analysis first
-            const pdfBounds = await getTableBoundariesFromPDF(first.pageIndex, label);
-            if (pdfBounds) {
-              console.log(`🎯 Using PDF structure bounds:`, pdfBounds);
-              
-              // Convert PDF coordinates to screen coordinates
-              const layerRect = layer.getBoundingClientRect();
-              // For now, use a simple approach - just circle a reasonable area around the label
-              const hlEls = layer.querySelectorAll('.rpv-search__highlight');
-              if (hlEls && hlEls.length > 0) {
-                const firstHl = hlEls[0] as HTMLElement;
-                const hlRect = firstHl.getBoundingClientRect();
-                const labelLeft = hlRect.left - layerRect.left;
-                const labelTop = hlRect.top - layerRect.top;
-                
-                // Create a much smaller, more precise circle
-                const padding = 20;
-                const circleWidth = Math.min(300, layerRect.width * 0.4); // Max 300px or 40% of page
-                const circleHeight = Math.min(200, layerRect.height * 0.25); // Max 200px or 25% of page
-                
-                drawCircleOnPage(first.pageIndex, {
-                  left: Math.max(0, labelLeft - padding),
-                  top: Math.max(0, labelTop - padding),
-                  width: circleWidth,
-                  height: circleHeight,
-                });
-                
-                console.log(`🎯 Drew precise table circle: ${circleWidth}x${circleHeight} at ${labelLeft}, ${labelTop}`);
-                return;
-              }
-            }
+            // Proceed with DOM-based analysis only
             
             const hlEls = layer.querySelectorAll('.rpv-search__highlight');
             if (!hlEls || hlEls.length === 0) {
@@ -985,13 +1147,86 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                 maxY = Math.max(maxY, elBottom);
               });
               
-              // For tables, extend the bottom boundary significantly to capture full table
+              // For tables, use extremely precise table structure detection
               if (isTable) {
-                const detectedBottom = tableBottomY > labelTop ? tableBottomY : maxY;
-                // Extend bottom boundary by additional amount to ensure full table capture
-                const extendedBottom = detectedBottom + 100; // Add 100px more to bottom
-                maxY = Math.max(maxY, extendedBottom);
-                console.log(`🎯 Extended table bottom from ${detectedBottom} to ${extendedBottom}`);
+                // Find ONLY the actual table data rows, not surrounding text
+                const tableElements = contentElements.filter(el => {
+                  const text = el.textContent?.trim() || '';
+                  const rect = el.getBoundingClientRect();
+                  const elTop = rect.top - layerRect.top;
+                  const elLeft = rect.left - layerRect.left;
+                  
+                  // Must be below the label
+                  if (elTop <= labelTop) return false;
+                  
+                  // Must be in the same column (strict)
+                  const columnMargin = 30; // Reduced margin for stricter column detection
+                  const inSameColumn = Math.abs(elLeft - labelLeft) < columnMargin || 
+                                     (elLeft >= columnStart && elLeft <= columnEnd);
+                  
+                  if (!inSameColumn) return false;
+                  
+                  // ONLY include elements that are likely table cells (generic heuristics)
+                  return (
+                    text.length > 0 &&
+                    text.length <= 48 &&
+                    (/[\d%]/.test(text) || text.split(/\s+/).filter(Boolean).length <= 6) &&
+                    !(/[.!?]{2,}/.test(text))
+                  );
+                });
+                
+                if (tableElements.length > 0) {
+                  // Sort by vertical position
+                  const sortedElements = tableElements
+                    .map(el => {
+                      const rect = el.getBoundingClientRect();
+                      return {
+                        element: el,
+                        top: rect.top - layerRect.top,
+                        bottom: rect.bottom - layerRect.top,
+                        text: el.textContent?.trim() || ''
+                      };
+                    })
+                    .sort((a, b) => a.top - b.top);
+                  
+                  // Find the tightest bounds around actual table data
+                  let tableStartY = sortedElements[0].top;
+                  let tableEndY = sortedElements[sortedElements.length - 1].bottom;
+                  
+                  // Look for the first and last actual data rows (not headers)
+                  let firstDataY = null;
+                  let lastDataY = null;
+                  
+                  for (const elem of sortedElements) {
+                    const isDataRow = /^\d+\.\d+$/.test(elem.text) || /^\d+\.\d+%$/.test(elem.text);
+                    if (isDataRow) {
+                      if (firstDataY === null) firstDataY = elem.top;
+                      lastDataY = elem.bottom;
+                    }
+                  }
+                  
+                  // Use data row bounds if found, otherwise use all elements
+                  if (firstDataY !== null && lastDataY !== null) {
+                    tableStartY = firstDataY;
+                    tableEndY = lastDataY;
+                  }
+                  
+                  // Apply minimal padding - just enough to include the table
+                  const padding = 20;
+                  const finalTop = Math.max(labelTop, tableStartY - padding);
+                  const finalBottom = tableEndY + padding;
+                  
+                  // Update the bounds to be much tighter
+                  minY = Math.min(minY, finalTop);
+                  maxY = Math.max(maxY, finalBottom);
+                  
+                  console.log(`🎯 Tight table bounds: ${finalTop} to ${finalBottom} (${sortedElements.length} elements)`);
+                } else {
+                  // If no table elements found, use a very conservative approach
+                  const conservativeBottom = labelTop + 300; // Just 300px below label
+                  maxY = Math.max(maxY, conservativeBottom);
+                  console.log(`🎯 No table elements found, using conservative ${conservativeBottom}px below label`);
+                }
               }
               
               // Include the original label in the bounds
@@ -1154,11 +1389,98 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       }
     };
 
-    const handleCircleTable = (event: any) => {
-      const label = String(event?.detail?.label || '').trim() || 'Table 1';
-      // Try to jump to the first detected page quickly once results return; circleByLabel will handle drawing
-      circleByLabel(label);
+    const handleCircleTable = async (event: any) => {
+      const label = String(event?.detail?.label || '').trim();
+      console.log(`🎯 Table Detection: Starting analysis for ${label}`);
+      
+      try {
+        // Clear any existing circles
+        try { clearAllCircles(); } catch {}
+
+        // Find the page with the table using multiple variants
+        const requestId = `search-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const variants: Array<{ keyword: string; matchCase: boolean }> = [{ keyword: label, matchCase: false }];
+        const num = label.match(/\d+/)?.[0];
+        if (/table/i.test(label) && num) {
+          variants.push(
+            { keyword: `Table ${num}`, matchCase: false },
+            { keyword: `table ${num}`, matchCase: false },
+            { keyword: `TABLE ${num}`, matchCase: false }
+          );
+        }
+
+        const onResults = (e: any) => {
+          if (e?.detail?.requestId !== requestId) return;
+          window.removeEventListener('pdf-search-results', onResults as EventListener);
+          const results = (e?.detail?.results || []) as Array<{ pageIndex: number; matchIndex: number }>;
+          if (!results.length) {
+            console.log(`🎯 No search results found for label: ${label}`);
+            return;
+          }
+          
+          const first = results[0];
+          console.log(`🎯 Found label on page ${first.pageIndex + 1}, starting OCR analysis...`);
+          
+          // Ensure the matched page is rendered before OCR
+          try {
+            try { pageNavigationPluginInstance.jumpToPage(first.pageIndex); } catch {}
+            try { scrollToPageIndex(first.pageIndex); } catch {}
+          } catch {}
+
+          (async () => {
+            const layer = await waitForPageLayer(first.pageIndex, 20, 150);
+            if (!layer) {
+              console.log('🎯 Page layer not ready for OCR; falling back to DOM analysis');
+              try { circleByLabel(label); } catch {}
+              return;
+            }
+            try {
+              // Use the label highlight bounds as OCR anchor
+              const hlEls = layer.querySelectorAll('.rpv-search__highlight');
+              let anchor: { left: number; top: number; width: number; height: number } | undefined;
+              if (hlEls && hlEls.length > 0) {
+                const layerRect = layer.getBoundingClientRect();
+                let minLeft = Number.POSITIVE_INFINITY, minTop = Number.POSITIVE_INFINITY, maxRight = 0, maxBottom = 0;
+                hlEls.forEach((n) => { const r = (n as HTMLElement).getBoundingClientRect(); minLeft = Math.min(minLeft, r.left); minTop = Math.min(minTop, r.top); maxRight = Math.max(maxRight, r.right); maxBottom = Math.max(maxBottom, r.bottom); });
+                anchor = {
+                  left: minLeft - layerRect.left,
+                  top: minTop - layerRect.top,
+                  width: Math.max(1, maxRight - minLeft),
+                  height: Math.max(1, maxBottom - minTop),
+                };
+              }
+
+              const bounds = await ocrDetectTableBoundsFromLayer(layer, anchor);
+              if (bounds) {
+                drawCircleOnPage(first.pageIndex, bounds);
+                try { scrollToPageIndex(first.pageIndex); } catch {}
+              } else {
+                console.log('🎯 OCR returned no bounds; falling back to DOM analysis');
+                try { circleByLabel(label); } catch {}
+              }
+            } catch {
+              try { circleByLabel(label); } catch {}
+            }
+          })();
+        };
+        
+        window.addEventListener('pdf-search-results', onResults as EventListener);
+        window.dispatchEvent(new CustomEvent('pdf-search-request', { 
+          detail: { 
+            requestId,
+            keywords: variants
+          } 
+        }));
+        
+      } catch (error) {
+        console.error('🎯 Table Detection Error:', error);
+        // Fallback to old method if OCR fails
+        circleByLabel(label);
+      }
     };
+
+    // Removed in-effect OCR duplicate; uses shared utils via performOCRTableDetection above
+
     const handleCircleFigure = (event: any) => {
       const label = String(event?.detail?.label || '').trim() || 'Figure 1';
       circleByLabel(label);
@@ -1280,129 +1602,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                   (window as any).__pdfOutline = flat;
                   window.dispatchEvent(new CustomEvent('pdf-outline', { detail: { sections: flat } }));
                   
-                  // Also try to extract section-like content from page text
-                  if (flat.length === 0) {
-                    console.log("🔍 PDF: No outline found, attempting to extract sections from page text...");
-                    try {
-                      const numPages = e?.doc?.numPages || 0;
-                      const textSections: Array<{ title: string; pageIndex: number }> = [];
-                      const seen = new Set<string>();
-                      const maxPages = Math.min(numPages, 30);
-                      
-                      const pushSection = (rawTitle: string, pageIdx: number) => {
-                        const title = String(rawTitle || '').replace(/\s+/g, ' ').trim();
-                        if (!title) return;
-                        const key = `${pageIdx}:${title.toLowerCase()}`;
-                        if (seen.has(key)) return;
-                        seen.add(key);
-                        textSections.push({ title, pageIndex: pageIdx });
-                      };
-                      
-                      for (let i = 0; i < maxPages; i++) {
-                        try {
-                          const page = await (e as any).doc.getPage(i + 1);
-                          const textContent = await page.getTextContent();
-                          const items = (textContent.items || []) as any[];
-                          
-                          // Group by visual line using Y coordinate (transform[5]) and keep an estimated font size per line
-                          const linesMap = new Map<number, { y: number; parts: string[]; maxSize: number }>();
-                          const allSizes: number[] = [];
-                          for (const it of items) {
-                            const str = String(it?.str || '').trim();
-                            if (!str) continue;
-                            const y = Math.round(Number(it?.transform?.[5] ?? 0));
-                            const a = Number(it?.transform?.[0] ?? 0);
-                            const d = Number(it?.transform?.[3] ?? 0);
-                            const estSize = Math.max(0, Math.sqrt(a * a + d * d));
-                            allSizes.push(estSize);
-                            if (!linesMap.has(y)) linesMap.set(y, { y, parts: [], maxSize: 0 });
-                            const rec = linesMap.get(y) as any;
-                            rec.parts.push(str);
-                            if (estSize > rec.maxSize) rec.maxSize = estSize;
-                          }
-                          const median = (() => {
-                            if (allSizes.length === 0) return 0;
-                            const s = allSizes.slice().sort((x, y) => x - y);
-                            const mid = Math.floor(s.length / 2);
-                            return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-                          })();
-                          
-                          const lines = Array.from(linesMap.values())
-                            .sort((a, b) => b.y - a.y)
-                            .map((l) => ({ text: l.parts.join(' ').replace(/\s+/g, ' ').trim(), size: l.maxSize }))
-                            .filter((l) => !!l.text);
-                          
-                          // Heuristics for headings
-                          const isTitleCase = (s: string) => {
-                            // at least two words start with capital and not ALL CAPS paragraphs
-                            const words = s.split(/\s+/);
-                            const capsStart = words.filter((w) => /^[A-Z][A-Za-z0-9\-]*$/.test(w)).length;
-                            return capsStart >= Math.min(2, Math.ceil(words.length * 0.5));
-                          };
-                          const isAllCapsShort = (s: string) => /^(?:[A-Z0-9][A-Z0-9\-]*\s*){1,8}$/.test(s);
-                          const wordCount = (s: string) => s.split(/\s+/).filter(Boolean).length;
-                          const numOnly = /^\d+(?:\.\d+)*$/;
-                          const numWithTitle = /^\d+(?:\.\d+)*\s+.+/;
-                          const namedSections = /^(Abstract|Introduction|Background|Related\s+Work|Methods?|Approach|Experiments?|Results|Discussion|Conclusions?|References|Appendix|Baselines?)\b/i;
-                          const tableFigure = /^(Table|Figure)\s+\d+[A-Za-z]?\b/i;
-                          
-                          for (let li = 0; li < lines.length; li++) {
-                            const { text: line, size } = lines[li];
-                            if (!line) continue;
-                            
-                            // 1) Number-only heading: try to merge with nearby title line (next or previous)
-                            if (numOnly.test(line)) {
-                              const next = lines[li + 1]?.text || '';
-                              const prev = lines[li - 1]?.text || '';
-                              const candidate = isTitleCase(next) ? next : (isTitleCase(prev) ? prev : '');
-                              if (candidate) {
-                                pushSection(`${line} ${candidate}`, i);
-                              } else {
-                                pushSection(line, i);
-                              }
-                              continue;
-                            }
-                            
-                            // 2) Number with title on same line
-                            if (numWithTitle.test(line)) {
-                              pushSection(line, i);
-                              continue;
-                            }
-                            
-                            // 3) Canonical named sections
-                            if (namedSections.test(line)) {
-                              pushSection(line, i);
-                              continue;
-                            }
-                            
-                            // 4) Table/Figure labels
-                            if (tableFigure.test(line)) {
-                              pushSection(line, i);
-                              continue;
-                            }
-                            
-                            // 5) Font-size based heading heuristic
-                            const wc = wordCount(line);
-                            const looksHeading = (size > median * 1.15) && wc > 0 && wc <= 12 && (isTitleCase(line) || isAllCapsShort(line));
-                            if (looksHeading) {
-                              pushSection(line, i);
-                              continue;
-                            }
-                          }
-                        } catch (err) {
-                          console.log(`🔍 PDF: Failed to extract text from page ${i + 1}:`, err);
-                        }
-                      }
-                      
-                      if (textSections.length > 0) {
-                        console.log("🔍 PDF: Found sections from text extraction:", textSections);
-                        (window as any).__pdfOutline = textSections;
-                        window.dispatchEvent(new CustomEvent('pdf-outline', { detail: { sections: textSections } }));
-                      }
-                    } catch (err) {
-                      console.log("🔍 PDF: Text-based section extraction failed:", err);
-                    }
-                  }
+                  // Removed: heavy PDF.js text-extraction fallback
                 } catch (err) {
                   console.log("🔍 PDF: Outline extraction completely failed:", err);
                 }

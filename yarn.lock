@@ -66,24 +66,24 @@
   integrity sha512-9uIQ10o0WGdpP6GDhXcdOJPJuDgFtIDtN/9+ArJQ2NAfAmiuhTQdzkaTGR33v43GYS2UrSA0eX2pPPHoFVvpxA==
 
 "@emnapi/core@^1.4.3", "@emnapi/core@^1.4.5":
-  version "1.4.5"
-  resolved "https://registry.yarnpkg.com/@emnapi/core/-/core-1.4.5.tgz#bfbb0cbbbb9f96ec4e2c4fd917b7bbe5495ceccb"
-  integrity sha512-XsLw1dEOpkSX/WucdqUhPWP7hDxSvZiY+fsUC14h+FtQ2Ifni4znbBt8punRX+Uj2JG/uDb8nEHVKvrVlvdZ5Q==
+  version "1.5.0"
+  resolved "https://registry.yarnpkg.com/@emnapi/core/-/core-1.5.0.tgz#85cd84537ec989cebb2343606a1ee663ce4edaf0"
+  integrity sha512-sbP8GzB1WDzacS8fgNPpHlp6C9VZe+SJP3F90W9rLemaQj2PzIuTEl1qDOYQf58YIpyjViI24y9aPWCjEzY2cg==
   dependencies:
-    "@emnapi/wasi-threads" "1.0.4"
+    "@emnapi/wasi-threads" "1.1.0"
     tslib "^2.4.0"
 
 "@emnapi/runtime@^1.4.3", "@emnapi/runtime@^1.4.4", "@emnapi/runtime@^1.4.5":
-  version "1.4.5"
-  resolved "https://registry.yarnpkg.com/@emnapi/runtime/-/runtime-1.4.5.tgz#c67710d0661070f38418b6474584f159de38aba9"
-  integrity sha512-++LApOtY0pEEz1zrd9vy1/zXVaVJJ/EbAF3u0fXIzPJEDtnITsBGbbK0EkM72amhl/R5b+5xx0Y/QhcVOpuulg==
+  version "1.5.0"
+  resolved "https://registry.yarnpkg.com/@emnapi/runtime/-/runtime-1.5.0.tgz#9aebfcb9b17195dce3ab53c86787a6b7d058db73"
+  integrity sha512-97/BJ3iXHww3djw6hYIfErCZFee7qCtrneuLa20UXFCOTCfBM2cvQHjWJ2EG0s0MtdNwInarqCTz35i4wWXHsQ==
   dependencies:
     tslib "^2.4.0"
 
-"@emnapi/wasi-threads@1.0.4", "@emnapi/wasi-threads@^1.0.4":
-  version "1.0.4"
-  resolved "https://registry.yarnpkg.com/@emnapi/wasi-threads/-/wasi-threads-1.0.4.tgz#703fc094d969e273b1b71c292523b2f792862bf4"
-  integrity sha512-PJR+bOmMOPH8AtcTGAyYNiuJ3/Fcoj2XN/gBEWzDIKh254XO+mM9XoXHk5GNEhodxeMznbg7BlRojVbKN+gC6g==
+"@emnapi/wasi-threads@1.1.0", "@emnapi/wasi-threads@^1.0.4":
+  version "1.1.0"
+  resolved "https://registry.yarnpkg.com/@emnapi/wasi-threads/-/wasi-threads-1.1.0.tgz#60b2102fddc9ccb78607e4a3cf8403ea69be41bf"
+  integrity sha512-WI0DdZ8xFSbgMjR1sFsKABJ/C5OnRrjT06JXbZKexJGrDuPTzZdDYfFlsgcCXCyf+suG5QU2e/y1Wo2V/OapLQ==
   dependencies:
     tslib "^2.4.0"
 
@@ -855,26 +855,26 @@
 
 "@react-pdf-viewer/attachment@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/attachment/-/attachment-3.12.0.tgz#82a43dc31ba01da8a366fbcdf8dd826a7ae161c0"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/attachment/-/attachment-3.12.0.tgz"
   integrity sha512-mhwrYJSIpCvHdERpLUotqhMgSjhtF+BTY1Yb9Fnzpcq3gLZP+Twp5Rynq21tCrVdDizPaVY7SKu400GkgdMfZw==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/bookmark@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/bookmark/-/bookmark-3.12.0.tgz#94288a06a19402658a73f5463ea0b447dcb3ff2d"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/bookmark/-/bookmark-3.12.0.tgz"
   integrity sha512-i7nEit8vIFMAES8RFGwprZ9cXOOZb9ZStPW6E6yuObJEXcvBj/ctsbBJGZxqUZOGklM0JoB7sjHyxAriHfe92A==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/core@3.12.0", "@react-pdf-viewer/core@^3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/core/-/core-3.12.0.tgz#40dc9bee5bce5281cd9ea62d958e4169b500fa14"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/core/-/core-3.12.0.tgz"
   integrity sha512-8MsdlQJ4jaw3GT+zpCHS33nwnvzpY0ED6DEahZg9WngG++A5RMhk8LSlxdHelwaFFHFiXBjmOaj2Kpxh50VQRg==
 
 "@react-pdf-viewer/default-layout@^3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/default-layout/-/default-layout-3.12.0.tgz#8e7ed62c1d2858b79d5ff305390c07c7c05a5538"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/default-layout/-/default-layout-3.12.0.tgz"
   integrity sha512-K2fS4+TJynHxxCBFuIDiFuAw3nqOh4bkBgtVZ/2pGvnFn9lLg46YGLMnTXCQqtyZzzXYh696jmlFViun3is4pA==
   dependencies:
     "@react-pdf-viewer/attachment" "3.12.0"
@@ -885,98 +885,98 @@
 
 "@react-pdf-viewer/full-screen@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/full-screen/-/full-screen-3.12.0.tgz#537bd7f4980e6d49ca491052d6e2390d4b1b5680"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/full-screen/-/full-screen-3.12.0.tgz"
   integrity sha512-hQouJ26QUaRBCXNMU1aI1zpJn4l4PJRvlHhuE2dZYtLl37ycjl7vBCQYZW1FwnuxMWztZsY47R43DKaZORg0pg==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/get-file@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/get-file/-/get-file-3.12.0.tgz#940c7475f9dc89c56c3e351a4636cc1a3f9f7080"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/get-file/-/get-file-3.12.0.tgz"
   integrity sha512-Uhq45n2RWlZ7Ec/BtBJ0WQESRciaYIltveDXHNdWvXgFdOS8XsvB+mnTh/wzm7Cfl9hpPyzfeezifdU9AkQgQg==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/highlight@^3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/highlight/-/highlight-3.12.0.tgz#9d3681f5f0fe8c7f603435054189a7b92e9750e1"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/highlight/-/highlight-3.12.0.tgz"
   integrity sha512-UxdnvnvTjikugOUEj/RIeJm3Lm93aVu+Xr0jMa7d+wrZlHh5b7wTd+FeI6gNk9wdJDrB70oHiCzn6MTbepkc5g==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/open@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/open/-/open-3.12.0.tgz#de668c0c64767b73828ca1fb9f990732b9d5d3d2"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/open/-/open-3.12.0.tgz"
   integrity sha512-vhiDEYsiQLxvZkIKT9VPYHZ1BOnv46x9eCEmRWxO1DJ8fa/GRDTA9ivXmq/ap0dGEJs6t+epleCkCEfllLR/Yw==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/page-navigation@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/page-navigation/-/page-navigation-3.12.0.tgz#399f1cc06e5dd8b40d5e44e4c57bcb6c84bced62"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/page-navigation/-/page-navigation-3.12.0.tgz"
   integrity sha512-tVEJ48Dd5kajV1nKkrPWijglJRNBiKBTyYDKVexhiRdTHUP1f6QQXiSyDgCUb0IGSZeJzOJb1h7ApKHe8OTtuw==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/print@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/print/-/print-3.12.0.tgz#0d978c4e8654585d8a486c45388b6fe68f3d47e0"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/print/-/print-3.12.0.tgz"
   integrity sha512-xJn76CgbU/M2iNaN7wLHTg+sdOekkRMfCakFLwPrE+SR7qD6NUF4vQQKJBSVCCK5bUijzb6cWfKGfo8VA72o4Q==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/properties@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/properties/-/properties-3.12.0.tgz#0fe85d9b07a65b612d456b50de6e5ab993c1970b"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/properties/-/properties-3.12.0.tgz"
   integrity sha512-dYTCHtVwFNkpDo7QxL2qk/8zAKndLwdD1FFxBftl6jIlQbtvNdxkFfkv1HcQING9Ic+7DBryOiD7W0ze4IERYg==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/rotate@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/rotate/-/rotate-3.12.0.tgz#f2e87d3e1fc3d8d16fe490636f68354334e58c3a"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/rotate/-/rotate-3.12.0.tgz"
   integrity sha512-yaxaMYPChvNOjR8+AxRmj0kvojyJKPq4XHEcIB2lJJgBY1Zra3mliDUP3Nlb4yV8BS9+yBqWn9U9mtnopQD+tw==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/scroll-mode@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/scroll-mode/-/scroll-mode-3.12.0.tgz#a875b9b58883b229d1757943c1420eb65aceaefd"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/scroll-mode/-/scroll-mode-3.12.0.tgz"
   integrity sha512-okII7Xqhl6cMvl1izdEvlXNJ+vJVq/qdg53hJIDYVgBCWskLk/cpjUg/ZonBxseG9lIDP3w2VO1McT8Gn11OAg==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/search@3.12.0", "@react-pdf-viewer/search@^3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/search/-/search-3.12.0.tgz#e308d0d8b30f087ef9877a968c821af1a6aaf180"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/search/-/search-3.12.0.tgz"
   integrity sha512-jAkLpis49fsDDY/HrbUZIOIhzF5vynONQNA4INQKI38r/MjveblrkNv7qbr9j5lQ/WFic5+gD1e+Mtpf1/7DiA==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/selection-mode@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/selection-mode/-/selection-mode-3.12.0.tgz#f86bd951205d6f485bbb5cce0c3128a00fea147b"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/selection-mode/-/selection-mode-3.12.0.tgz"
   integrity sha512-yysWEu2aCtBvzSgbhgI9kT5cq2hf0FU6Z+3B7MMXz14Kxyc3y18wUqxtgbvpFEfWF0bNUUq16JtWRljtxvZ83w==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/theme@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/theme/-/theme-3.12.0.tgz#d7f667124ec4d5dacc6396e0a4ab1935b8f188af"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/theme/-/theme-3.12.0.tgz"
   integrity sha512-cdBi+wR1VOZ6URCcO9plmAZQu4ZGFcd7HJdBe7VIFiGyrvl9I/Of74ONLycnDImSuONt8D3uNjPBLieeaShVeg==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/thumbnail@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/thumbnail/-/thumbnail-3.12.0.tgz#cfb13094ada7c7d2761d265326043ee9ddf9e22c"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/thumbnail/-/thumbnail-3.12.0.tgz"
   integrity sha512-Vc8j3bO6wumWZV4o6pAbktPWKDSC9tQAzOCJ3cof541u4i44C11ccYC4W9aNcsMMUSO3bNwAGWtP8OFthV5akQ==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
 
 "@react-pdf-viewer/toolbar@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/toolbar/-/toolbar-3.12.0.tgz#e168ca964a4933fb76831cee48cb3ed862011ad2"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/toolbar/-/toolbar-3.12.0.tgz"
   integrity sha512-qACTU3qXHgtNK8J+T13EWio+0liilj86SJ87BdapqXynhl720OKPlSKOQqskUGqg3oTUJAhrse9XG6SFdHJx+g==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
@@ -995,7 +995,7 @@
 
 "@react-pdf-viewer/zoom@3.12.0":
   version "3.12.0"
-  resolved "https://registry.yarnpkg.com/@react-pdf-viewer/zoom/-/zoom-3.12.0.tgz#4eaa0d28d5f92b10124c4374b684cbaefc51c1c2"
+  resolved "https://registry.npmjs.org/@react-pdf-viewer/zoom/-/zoom-3.12.0.tgz"
   integrity sha512-V0GUTyPM77+LzhoKX+T3XI10/HfGdqRTbgeP7ID60FCzcwu6kXWqJn5tzabjDKLTlFv8mJmn0aa/ppkIU97nfA==
   dependencies:
     "@react-pdf-viewer/core" "3.12.0"
@@ -1135,9 +1135,9 @@
     tailwindcss "4.1.12"
 
 "@tybys/wasm-util@^0.10.0":
-  version "0.10.0"
-  resolved "https://registry.npmjs.org/@tybys/wasm-util/-/wasm-util-0.10.0.tgz"
-  integrity sha512-VyyPYFlOMNylG45GoAe0xDoLwWuowvf92F9kySqzYh8vmYm7D2u4iUJKa1tOUpS70Ku13ASrOkS4ScXFsTaCNQ==
+  version "0.10.1"
+  resolved "https://registry.yarnpkg.com/@tybys/wasm-util/-/wasm-util-0.10.1.tgz#ecddd3205cf1e2d5274649ff0eedd2991ed7f414"
+  integrity sha512-9tTaPJLSiejZKx+Bmog4uSubteqTvFrVrURwkmHixBo0G4seD0zUxp98E1DzUBJxLQ3NPwXrGKDiVjwx/DpPsg==
   dependencies:
     tslib "^2.4.0"
 
@@ -1750,6 +1750,11 @@ bcryptjs@^2.4.3:
   version "2.4.3"
   resolved "https://registry.npmjs.org/bcryptjs/-/bcryptjs-2.4.3.tgz"
   integrity sha512-V/Hy/X9Vt7f3BbPJEi8BdVFMByHi+jNXrYkW3huaybV/kQ0KJg0Y6PkEMbn+zeT+i+SiKZ/HMqJGIIt4LZDqNQ==
+
+bmp-js@^0.1.0:
+  version "0.1.0"
+  resolved "https://registry.npmjs.org/bmp-js/-/bmp-js-0.1.0.tgz"
+  integrity sha512-vHdS19CnY3hwiNdkaqk93DvjVLfbEcI8mys4UjuWrlX1haDmroo8o4xCzh4wD6DGV6HxRCyauwhHRqMTfERtjw==
 
 body-parser@^2.2.0:
   version "2.2.0"
@@ -3156,6 +3161,14 @@ html2canvas@^1.0.0-rc.5:
     css-line-break "^2.1.0"
     text-segmentation "^1.0.3"
 
+html2canvas@^1.4.1:
+  version "1.4.1"
+  resolved "https://registry.yarnpkg.com/html2canvas/-/html2canvas-1.4.1.tgz#7cef1888311b5011d507794a066041b14669a543"
+  integrity sha512-fPU6BHNpsyIhr8yyMpTLLxAbkaK8ArIBcmZIRiBLiDhjeqvXolaEmDGmELFuX9I4xDcaKKcJl+TKZLqruBbmWA==
+  dependencies:
+    css-line-break "^2.1.0"
+    text-segmentation "^1.0.3"
+
 http-errors@2.0.0, http-errors@^2.0.0:
   version "2.0.0"
   resolved "https://registry.npmjs.org/http-errors/-/http-errors-2.0.0.tgz"
@@ -3188,6 +3201,11 @@ iconv-lite@0.6.3, iconv-lite@^0.6.3:
   integrity sha512-4fCk79wshMdzMp2rH06qWrJE4iolqLhCUH+OiuIgU++RB0+94NlDL81atO7GX55uUKueo0txHNtvEyI6D7WdMw==
   dependencies:
     safer-buffer ">= 2.1.2 < 3.0.0"
+
+idb-keyval@^6.2.0:
+  version "6.2.2"
+  resolved "https://registry.npmjs.org/idb-keyval/-/idb-keyval-6.2.2.tgz"
+  integrity sha512-yjD9nARJ/jb1g+CvD0tlhUHOrJ9Sy0P8T9MF3YaLlHnSRpwPfpTX0XIvpmw3gAJUmEu3FiICLBDPXVwyEvrleg==
 
 ignore@^5.2.0:
   version "5.3.2"
@@ -3460,6 +3478,11 @@ is-typed-array@^1.1.13, is-typed-array@^1.1.14, is-typed-array@^1.1.15:
   integrity sha512-p3EcsicXjit7SaskXHs1hA91QxgTw46Fv6EFKKGS5DRFLD8yKnohjF3hxoju94b/OcMZoQukzpPpBE9uLVKzgQ==
   dependencies:
     which-typed-array "^1.1.16"
+
+is-url@^1.2.4:
+  version "1.2.4"
+  resolved "https://registry.npmjs.org/is-url/-/is-url-1.2.4.tgz"
+  integrity sha512-ITvGim8FhRiYe4IQ5uHSkj7pVaPDrCTkNd3yq3cV7iZAcJdHTUMPMEHcqSOy9xZ9qFenQCvi+2wjH9a1nXqHww==
 
 is-weakmap@^2.0.2:
   version "2.0.2"
@@ -4282,7 +4305,7 @@ node-fetch-native@^1.6.6:
   resolved "https://registry.npmjs.org/node-fetch-native/-/node-fetch-native-1.6.7.tgz"
   integrity sha512-g9yhqoedzIUm0nTnTqAQvueMPVOuIY16bqgAJJC8XOOubYFNwz6IER9qs0Gq2Xd0+CecCKFjtdDTMA4u4xG06Q==
 
-node-fetch@^2.6.7:
+node-fetch@^2.6.7, node-fetch@^2.6.9:
   version "2.7.0"
   resolved "https://registry.npmjs.org/node-fetch/-/node-fetch-2.7.0.tgz"
   integrity sha512-c4FRfUm/dbcWZ7U+1Wq0AwCyFL+3nt2bEw05wfxSz+DWpWsitgmSgYmy2dQdWyKC1694ELPqMs/YzUSNozLt8A==
@@ -4425,6 +4448,11 @@ openai@^5.0.1:
   resolved "https://registry.npmjs.org/openai/-/openai-5.13.1.tgz"
   integrity sha512-Jty97Apw40znKSlXZL2YDap1U2eN9NfXbqm/Rj1rExeOLEnhwezpKQ+v43kIqojavUgm30SR3iuvGlNEBR+AFg==
 
+opencollective-postinstall@^2.0.3:
+  version "2.0.3"
+  resolved "https://registry.npmjs.org/opencollective-postinstall/-/opencollective-postinstall-2.0.3.tgz"
+  integrity sha512-8AV/sCtuzUeTo8gQK5qDZzARrulB3egtLzFgteqB2tcT4Mw7B8Kt7JcDHmltjz6FOAHsvTevk70gZEbhM4ZS9Q==
+
 optionator@^0.9.3:
   version "0.9.4"
   resolved "https://registry.npmjs.org/optionator/-/optionator-0.9.4.tgz"
@@ -4512,14 +4540,14 @@ path-to-regexp@^8.0.0:
 
 path2d-polyfill@^2.0.1:
   version "2.1.1"
-  resolved "https://registry.yarnpkg.com/path2d-polyfill/-/path2d-polyfill-2.1.1.tgz#6098b7bf2fc24c306c6377bcd558b17ba437ea27"
+  resolved "https://registry.npmjs.org/path2d-polyfill/-/path2d-polyfill-2.1.1.tgz"
   integrity sha512-4Rka5lN+rY/p0CdD8+E+BFv51lFaFvJOrlOhyQ+zjzyQrzyh3ozmxd1vVGGDdIbUFSBtIZLSnspxTgPT0iJhvA==
   dependencies:
     path2d "0.1.1"
 
 path2d@0.1.1:
   version "0.1.1"
-  resolved "https://registry.yarnpkg.com/path2d/-/path2d-0.1.1.tgz#d3c3886cd2252fb2a7830c27ea7bb9a862d937ea"
+  resolved "https://registry.npmjs.org/path2d/-/path2d-0.1.1.tgz"
   integrity sha512-/+S03c8AGsDYKKBtRDqieTJv2GlkMb0bWjnqOgtF6MkjdUQ9a8ARAtxWf9NgKLGm2+WQr6+/tqJdU8HNGsIDoA==
 
 pathe@^2.0.3:
@@ -4536,7 +4564,7 @@ pdf2pic@^3.2.0:
 
 pdfjs-dist@^3.11.174:
   version "3.11.174"
-  resolved "https://registry.yarnpkg.com/pdfjs-dist/-/pdfjs-dist-3.11.174.tgz#5ff47b80f2d58c8dd0d74f615e7c6a7e7e704c4b"
+  resolved "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-3.11.174.tgz"
   integrity sha512-TdTZPf1trZ8/UFu5Cx/GXB7GZM30LT+wWUNfsi6Bq8ePLnb+woNKtDymI2mxZYBpMbonNFqKmiz684DIfnd8dA==
   optionalDependencies:
     canvas "^2.11.2"
@@ -4763,7 +4791,7 @@ reflect.getprototypeof@^1.0.6, reflect.getprototypeof@^1.0.9:
     get-proto "^1.0.1"
     which-builtin-type "^1.2.1"
 
-regenerator-runtime@^0.13.7:
+regenerator-runtime@^0.13.3, regenerator-runtime@^0.13.7:
   version "0.13.11"
   resolved "https://registry.npmjs.org/regenerator-runtime/-/regenerator-runtime-0.13.11.tgz"
   integrity sha512-kY1AZVr2Ra+t+piVaJ4gxaFaReZVH40AKNo7UCX6W+dEwBo/2oZJzqfuN1qLq1oL45o56cPaTXELwrTh8Fpggg==
@@ -5337,6 +5365,26 @@ tar@^7.4.3:
     mkdirp "^3.0.1"
     yallist "^5.0.0"
 
+tesseract.js-core@^6.0.0:
+  version "6.0.0"
+  resolved "https://registry.npmjs.org/tesseract.js-core/-/tesseract.js-core-6.0.0.tgz"
+  integrity sha512-1Qncm/9oKM7xgrQXZXNB+NRh19qiXGhxlrR8EwFbK5SaUbPZnS5OMtP/ghtqfd23hsr1ZvZbZjeuAGcMxd/ooA==
+
+tesseract.js@^6.0.1:
+  version "6.0.1"
+  resolved "https://registry.npmjs.org/tesseract.js/-/tesseract.js-6.0.1.tgz"
+  integrity sha512-/sPvMvrCtgxnNRCjbTYbr7BRu0yfWDsMZQ2a/T5aN/L1t8wUQN6tTWv6p6FwzpoEBA0jrN2UD2SX4QQFRdoDbA==
+  dependencies:
+    bmp-js "^0.1.0"
+    idb-keyval "^6.2.0"
+    is-url "^1.2.4"
+    node-fetch "^2.6.9"
+    opencollective-postinstall "^2.0.3"
+    regenerator-runtime "^0.13.3"
+    tesseract.js-core "^6.0.0"
+    wasm-feature-detect "^1.2.11"
+    zlibjs "^0.3.1"
+
 text-segmentation@^1.0.3:
   version "1.0.3"
   resolved "https://registry.npmjs.org/text-segmentation/-/text-segmentation-1.0.3.tgz"
@@ -5645,6 +5693,11 @@ vfile@^6.0.0:
     "@types/unist" "^3.0.0"
     vfile-message "^4.0.0"
 
+wasm-feature-detect@^1.2.11:
+  version "1.8.0"
+  resolved "https://registry.npmjs.org/wasm-feature-detect/-/wasm-feature-detect-1.8.0.tgz"
+  integrity sha512-zksaLKM2fVlnB5jQQDqKXXwYHLQUVH9es+5TOOHwGOVJOCeRBCiPjwSg+3tN2AdTCzjgli4jijCH290kXb/zWQ==
+
 web-streams-polyfill@4.0.0-beta.3:
   version "4.0.0-beta.3"
   resolved "https://registry.npmjs.org/web-streams-polyfill/-/web-streams-polyfill-4.0.0-beta.3.tgz"
@@ -5759,6 +5812,11 @@ yocto-queue@^0.1.0:
   version "0.1.0"
   resolved "https://registry.npmjs.org/yocto-queue/-/yocto-queue-0.1.0.tgz"
   integrity sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==
+
+zlibjs@^0.3.1:
+  version "0.3.1"
+  resolved "https://registry.npmjs.org/zlibjs/-/zlibjs-0.3.1.tgz"
+  integrity sha512-+J9RrgTKOmlxFSDHo0pI1xM6BLVUv+o0ZT9ANtCxGkjIVCCUdx9alUF8Gm+dGLKbkkkidWIHFDZHDMpfITt4+w==
 
 zod-to-json-schema@^3.24.1:
   version "3.24.6"
