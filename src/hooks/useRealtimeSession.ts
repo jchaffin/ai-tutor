@@ -10,6 +10,77 @@ import { useEvent } from '@/contexts/EventContext';
 import { useHandleSessionHistory } from './useHandleSessionHistory';
 import { SessionStatus } from '@/types';
 
+// Trigger semantic search for tutor utterances
+async function triggerSemanticSearch(utterance: string, sessionId?: string, utteranceId?: string) {
+  try {
+    // Get current document ID from URL or global state
+    const documentId = (window as any).__currentDocumentId || 
+                      window.location.pathname.split('/').pop();
+    
+    if (!documentId) return;
+    
+    console.log(`🔍 Triggering real-time semantic search for: "${utterance}"`);
+    
+    const response = await fetch('/api/realtime/semantic-search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        query: utterance, 
+        documentId,
+        sessionId: sessionId || `session-${Date.now()}`,
+        utteranceId: utteranceId || `utterance-${Date.now()}`
+      })
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      if (data.results && data.results.length > 0) {
+        console.log(`🔍 Found ${data.results.length} semantic matches for "${utterance}"`);
+        
+        // Dispatch semantic fragment events for each result
+        data.results.forEach((result: any, index: number) => {
+          if (result.text && result.text.length > 10) {
+            // Add a small delay to stagger highlights for better visual effect
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('tutor-highlight-semantic-fragment', {
+                detail: {
+                  text: result.text,
+                  page: result.page,
+                  similarity: result.similarity,
+                  query: utterance,
+                  sessionId: data.sessionId,
+                  utteranceId: data.utteranceId,
+                  chunkId: result.chunkId,
+                  startIndex: result.startIndex,
+                  endIndex: result.endIndex,
+                  highlightIndex: index
+                }
+              }));
+            }, index * 200); // 200ms delay between highlights
+          }
+        });
+        
+        // Dispatch a summary event for the UI
+        window.dispatchEvent(new CustomEvent('semantic-search-completed', {
+          detail: {
+            query: utterance,
+            resultsCount: data.results.length,
+            sessionId: data.sessionId,
+            utteranceId: data.utteranceId,
+            timestamp: data.timestamp
+          }
+        }));
+      } else {
+        console.log(`🔍 No semantic matches found for "${utterance}"`);
+      }
+    } else {
+      console.log("🔍 Semantic search API error:", response.status);
+    }
+  } catch (error) {
+    console.log("🔍 Real-time semantic search failed:", error);
+  }
+}
+
 export interface RealtimeSessionCallbacks {
   onConnectionChange?: (status: SessionStatus) => void;
   onAgentHandoff?: (agentName: string) => void;
@@ -176,12 +247,65 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
         console.log("🎵 Response transcript done:", event);
         historyHandlers.handleTranscriptionCompleted(event);
         maybeNavigateFrom((event as any).transcript || (event as any).text || "");
+        
+        // Dispatch tutor transcript event for PDF highlighting - only on complete utterances
+        if (typeof window !== 'undefined' && (event as any).transcript) {
+          window.dispatchEvent(new CustomEvent('tutor-transcript-delta', {
+            detail: {
+              itemId: (event as any).item_id || `response-complete-${Date.now()}`,
+              delta: (event as any).transcript,
+              transcript: (event as any).transcript,
+              role: 'assistant',
+              isComplete: true
+            }
+          }));
+        }
         break;
       }
       case "response.audio_transcript.delta": {
         console.log("🎵 Response transcript delta:", event);
         historyHandlers.handleTranscriptionDelta(event);
         maybeNavigateFrom((event as any).delta || "");
+
+        // Always emit a normalized event the UI can consume for live updates
+        if (typeof window !== 'undefined' && (event as any).delta) {
+          const delta = (event as any).delta as string;
+          const transcript = ((event as any).transcript || '') as string;
+
+          // General delta for incremental buffering/highlighting
+          window.dispatchEvent(new CustomEvent('tutor-transcript-delta', {
+            detail: {
+              itemId: (event as any).item_id || `response-delta-${Date.now()}`,
+              delta,
+              transcript: transcript || delta,
+              role: 'assistant',
+              isUtterance: false,
+              isComplete: false,
+            }
+          }));
+
+          // If this delta ends an utterance, emit an utterance marker and trigger semantic search
+          if (/[.!?]\s*$/.test(delta)) {
+            window.dispatchEvent(new CustomEvent('tutor-transcript-delta', {
+              detail: {
+                itemId: (event as any).item_id || `response-utterance-${Date.now()}`,
+                delta,
+                transcript: transcript || delta,
+                role: 'assistant',
+                isUtterance: true,
+                isComplete: false,
+              }
+            }));
+
+            // Also trigger semantic search for meaningful utterances
+            const cleanDelta = delta.trim();
+            if (cleanDelta.length > 3 && !/^[.!?]+$/.test(cleanDelta)) {
+              const sessionId = `session-${Date.now()}`;
+              const utteranceId = `utterance-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+              triggerSemanticSearch(delta, sessionId, utteranceId);
+            }
+          }
+        }
         break;
       }
       case "conversation.item.input_audio_transcription.delta": {
@@ -266,6 +390,47 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
     session.on("agent_tool_end", (details, agent, functionCall, result) => {
       console.log("🔧 TOOL END:", functionCall.name, result);
       historyHandlers.handleAgentToolEnd(details, agent, functionCall, result);
+      
+      // Handle semantic search tool results
+      if (functionCall.name === 'semantic_search') {
+        try {
+          const toolResult = typeof result === 'string' ? JSON.parse(result) : result;
+          if (toolResult?.shouldHighlight && toolResult?.results) {
+            console.log("🔍 Processing semantic search results for highlighting:", toolResult.results.length);
+            
+            // Dispatch semantic fragment events for each result
+            toolResult.results.forEach((semanticResult: any, index: number) => {
+              if (semanticResult.text && semanticResult.text.length > 10 && semanticResult.similarity > 0.6) {
+                console.log(`🔍 Dispatching highlight event for semantic result ${index}:`, {
+                  text: semanticResult.text.substring(0, 50),
+                  similarity: semanticResult.similarity,
+                  page: semanticResult.page
+                });
+                
+                setTimeout(() => {
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('tutor-highlight-semantic-fragment', {
+                      detail: {
+                        text: semanticResult.text,
+                        page: semanticResult.page,
+                        similarity: semanticResult.similarity,
+                        query: toolResult.query,
+                        chunkId: semanticResult.chunkId,
+                        startIndex: semanticResult.startIndex,
+                        endIndex: semanticResult.endIndex,
+                        highlightIndex: index,
+                        source: 'agent-tool'
+                      }
+                    }));
+                  }
+                }, index * 100); // Quick highlighting
+              }
+            });
+          }
+        } catch (error) {
+          console.error("🔍 Error processing semantic search tool result:", error);
+        }
+      }
     });
     session.on("history_updated", historyHandlers.handleHistoryUpdated);
     session.on("history_added", historyHandlers.handleHistoryAdded);
@@ -323,8 +488,26 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
       await sessionRef.current.connect({ apiKey: ek });
       console.log("✅ Session connected successfully");
       
+      // Clear all highlights and reset to page 1 when starting new session
+      if (typeof window !== 'undefined') {
+        // Clear all highlights
+        window.dispatchEvent(new CustomEvent('clear-all-highlights'));
+        console.log("🧹 Cleared all highlights for new session");
+        
+        // Reset to page 1
+        window.dispatchEvent(new CustomEvent('navigate-to-page', { detail: { page: 1 } }));
+        console.log("📄 Reset to page 1 for new session");
+      }
+      
       // Setup event listeners after connection
       setupEventListeners(sessionRef.current);
+      
+      // Initialize document ID for semantic search
+      const documentId = (window as any).__currentDocumentId || 
+                        window.location.pathname.split('/').pop();
+      if (documentId) {
+        console.log("🔍 Document ID set for semantic search:", documentId);
+      }
       
       updateStatus('CONNECTED');
     },

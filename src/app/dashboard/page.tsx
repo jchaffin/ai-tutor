@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 
+
 interface RenameState {
   id: string
   title: string
@@ -103,6 +104,7 @@ export default function Dashboard() {
       setDeletingId(null)
     }
   }
+
 
   if (status === 'loading') {
     return (

@@ -1609,20 +1609,147 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       const label = String(event?.detail?.label || '').trim() || 'Figure 1';
       circleByLabel(label);
     };
+    
+    const handleCircleSection = (event: any) => {
+      const { sectionTitle, pageIndex, term } = event.detail || {};
+      console.log(`🎯 Circling entire section: "${sectionTitle}" on page ${pageIndex + 1}`);
+      
+      // Navigate to the section page first
+      try {
+        if ((window as any).pdfJumpToPage) {
+          (window as any).pdfJumpToPage(pageIndex + 1);
+        } else {
+          window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: pageIndex } }));
+        }
+      } catch {}
+      
+      // Wait for page to load, then circle the entire section using OCR
+      setTimeout(async () => {
+        try {
+          // Clear all existing highlights and circles first
+          try { clearAllCircles(); } catch {}
+          try {
+            if (searchPluginInstanceRef.current) {
+              searchPluginInstanceRef.current.clearHighlights();
+            }
+          } catch {}
+          
+          const layer = await waitForPageLayer(pageIndex, 20, 150);
+          if (!layer) {
+            console.log('🎯 Page layer not ready for section circling');
+            return;
+          }
+          
+          // Find the section TITLE (not the first occurrence of the term)
+          // Strategy:
+          // 1) Prefer a numbered heading like "3.2 Inter-Head Gating"
+          // 2) Otherwise exact title match
+          // 3) Constrain to elements near the top portion of the page
+          const layerRect = layer.getBoundingClientRect();
+          const maxTop = layerRect.top + layerRect.height * 0.35; // heading should be near top third
+          const wantedTitle = (sectionTitle || '').trim();
+          const wantedLc = wantedTitle.toLowerCase();
+          // Require a numbered heading (e.g., "3.2 Inter-Head Gating"), optional trailing dot after number
+          // Hyphen and space are considered equivalent inside the title tokens
+          const titlePattern = wantedLc.replace(/[-\s]+/g, '[-\\s]+');
+          const headingRegex = new RegExp(`^\\s*\\d+(?:\\.\\d+)*\\.?\\s+${titlePattern}\b`, 'i');
+
+          let candidates = Array.from(layer.querySelectorAll('span, div')).filter(el => {
+            const text = (el.textContent || '').trim();
+            if (!text) return false;
+            const rect = el.getBoundingClientRect();
+            // Must be in top third of page
+            if (rect.top > maxTop) return false;
+            // Match numbered heading or exact title
+            if (headingRegex.test(text)) return true;
+            return false;
+          });
+
+          // Fallback: if not found near top (e.g., subsection appears mid/low page), scan full page
+          if (candidates.length === 0) {
+            candidates = Array.from(layer.querySelectorAll('span, div')).filter(el => {
+              const text = (el.textContent || '').trim();
+              if (!text) return false;
+              return headingRegex.test(text);
+            });
+          }
+          
+          if (candidates.length > 0) {
+            // Choose the highest title-like element (closest to top)
+            const titleEl = candidates.sort((a,b)=>a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0] as HTMLElement;
+            const titleRect = titleEl.getBoundingClientRect();
+            
+            // Calculate section boundaries based on the title position
+            const sectionBounds = {
+              left: Math.max(0, titleRect.left - layerRect.left - 20),
+              top: Math.max(0, titleRect.top - layerRect.top - 20),
+              width: Math.min(layerRect.width - 40, layerRect.width - (titleRect.left - layerRect.left) + 20),
+              height: Math.min(400, layerRect.height - (titleRect.top - layerRect.top) + 20) // Cover most of the section
+            };
+            
+            drawCircleOnPage(pageIndex, sectionBounds);
+            try { scrollToPageIndex(pageIndex); } catch {}
+            console.log(`🎯 Circled entire section "${sectionTitle}" with bounds:`, sectionBounds);
+          } else {
+            console.log('🎯 Could not find section title, using full page area');
+            // Fallback: circle a large area of the page
+            const layerRect = layer.getBoundingClientRect();
+            const sectionBounds = {
+              left: 20,
+              top: 50,
+              width: layerRect.width - 40,
+              height: Math.min(500, layerRect.height - 100)
+            };
+            drawCircleOnPage(pageIndex, sectionBounds);
+          }
+        } catch (error) {
+          console.error('🎯 Error circling section:', error);
+        }
+      }, 500); // Give more time for page to load
+    };
+    
     const handleClearAnnotations = () => clearAllCircles();
 
     window.addEventListener('tutor-circle-table', handleCircleTable as EventListener);
     window.addEventListener('tutor-circle-figure', handleCircleFigure as EventListener);
+    window.addEventListener('tutor-circle-section', handleCircleSection as EventListener);
     window.addEventListener('tutor-annotations-clear', handleClearAnnotations as EventListener);
     window.addEventListener('tutor-highlight-quote', handleHighlightQuote as EventListener);
     window.addEventListener('tutor-highlight-content-ocr', handleHighlightContentOCR as EventListener);
     
+    // Handle semantic fragment highlighting
+    const handleSemanticFragment = (event: any) => {
+      const { text, page, similarity, query, chunkId, startIndex, endIndex } = event.detail || {};
+      console.log(`🎯 Received semantic fragment event:`, { text: text?.substring(0, 50), similarity, query, chunkId });
+      
+      if (text && similarity > 0.5) {
+        console.log(`🎯 Highlighting semantic fragment (${similarity.toFixed(2)} similarity):`, text.substring(0, 50) + '...');
+        
+        // Use the existing highlight system to highlight this specific fragment
+        const requestId = `semantic-fragment-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        
+        // Search for this exact text fragment
+        window.dispatchEvent(new CustomEvent('pdf-search-request', {
+          detail: {
+            requestId,
+            keywords: [{ keyword: text, matchCase: false }]
+          }
+        }));
+      } else {
+        console.log(`🎯 Skipping semantic fragment (similarity ${similarity?.toFixed(2)} too low or no text)`);
+      }
+    };
+    
+    window.addEventListener('tutor-highlight-semantic-fragment', handleSemanticFragment as EventListener);
+    
     return () => {
       window.removeEventListener('tutor-circle-table', handleCircleTable as EventListener);
       window.removeEventListener('tutor-circle-figure', handleCircleFigure as EventListener);
+      window.removeEventListener('tutor-circle-section', handleCircleSection as EventListener);
       window.removeEventListener('tutor-annotations-clear', handleClearAnnotations as EventListener);
       window.removeEventListener('tutor-highlight-quote', handleHighlightQuote as EventListener);
       window.removeEventListener('tutor-highlight-content-ocr', handleHighlightContentOCR as EventListener);
+      window.removeEventListener('tutor-highlight-semantic-fragment', handleSemanticFragment as EventListener);
     };
   }, []);
 

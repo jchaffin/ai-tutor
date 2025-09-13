@@ -1,14 +1,10 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
 
-
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
+  provider     = "postgresql"
+  url          = env("DATABASE_URL")
   relationMode = "prisma"
 }
 
@@ -25,8 +21,7 @@ model Account {
   scope             String?
   id_token          String?
   session_state     String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
 }
@@ -40,19 +35,19 @@ model Session {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  name          String?
-  email         String    @unique
-  password      String?
-  emailVerified DateTime?
-  image         String?
-  accounts      Account[]
-  sessions      Session[]
-  documents     Document[]
-  chatSessions  ChatSession[]
+  id             String          @id @default(cuid())
+  name           String?
+  email          String          @unique
+  password       String?
+  emailVerified  DateTime?
+  image          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  accounts       Account[]
+  sessions       Session[]
+  documents      Document[]
+  chatSessions   ChatSession[]
   authenticators Authenticator[]
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
 }
 
 model VerificationToken {
@@ -63,9 +58,8 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-// For WebAuthn/Passkey support (Auth.js)
 model Authenticator {
-  credentialID         String
+  credentialID         String  @unique
   userId               String
   providerAccountId    String
   credentialPublicKey  String
@@ -73,76 +67,74 @@ model Authenticator {
   credentialDeviceType String
   credentialBackedUp   Boolean
   transports           String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                 User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([userId, credentialID])
-  @@unique([credentialID])
 }
 
 model Document {
-  id           String        @id @default(cuid())
+  id           String          @id @default(cuid())
   title        String
   filename     String
   filepath     String
   mimeType     String
   size         Int
   userId       String
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   chatSessions ChatSession[]
   chunks       DocumentChunk[]
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
 }
 
 model ChatSession {
   id         String    @id @default(cuid())
   userId     String
   documentId String
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   document   Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
   messages   Message[]
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
 }
 
 model Message {
   id            String       @id @default(cuid())
   chatSessionId String
-  chatSession   ChatSession  @relation(fields: [chatSessionId], references: [id], onDelete: Cascade)
-  role          String       // 'user' or 'assistant'
+  role          String
   content       String
-  annotations   Annotation[]
   createdAt     DateTime     @default(now())
+  chatSession   ChatSession  @relation(fields: [chatSessionId], references: [id], onDelete: Cascade)
+  annotations   Annotation[]
 }
 
 model Annotation {
-  id        String  @id @default(cuid())
+  id        String   @id @default(cuid())
   messageId String
-  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
   page      Int
   x         Float
   y         Float
   width     Float
   height    Float
-  type      String  // 'highlight', 'circle', 'rectangle'
-  color     String  @default("#ffff00")
+  type      String
+  color     String   @default("#ffff00")
   text      String?
   createdAt DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
 }
 
 model DocumentChunk {
-  id          String   @id @default(cuid())
-  documentId  String
-  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  page        Int?
-  idx         Int      // chunk index within document
-  start       Int?     // start char offset in full text
-  end         Int?     // end char offset in full text
-  text        String
-  embedding   Float[]  // stored embedding vector
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String   @id @default(cuid())
+  documentId String
+  page       Int?
+  idx        Int
+  start      Int?
+  end        Int?
+  text       String
+  embedding  Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
   @@unique([documentId, idx])
 }

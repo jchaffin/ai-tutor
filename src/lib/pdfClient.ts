@@ -18,7 +18,7 @@ export interface TableBox {
 // Detect table-like rectangular boundaries by scanning pixel data for long dark lines
 export function detectTableBoundaries(imageData: ImageData, width: number, height: number): TableBox | null {
   const data = imageData.data;
-  const threshold = 180; // Lower threshold to detect lighter lines
+  const threshold = 150; // Even lower threshold to detect lighter lines and text
   const horizontalLines: number[] = [];
   const verticalLines: number[] = [];
   
@@ -83,7 +83,7 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
         consecutiveDark = 0;
       }
     }
-    if (maxConsecutive > width * 0.2) horizontalLines.push(y); // Lower threshold for horizontal lines
+    if (maxConsecutive > width * 0.15) horizontalLines.push(y); // Even lower threshold for horizontal lines
   }
 
   // Vertical lines
@@ -100,7 +100,7 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
         consecutiveDark = 0;
       }
     }
-    if (maxConsecutive > height * 0.15) verticalLines.push(x); // Even lower threshold for vertical lines
+    if (maxConsecutive > height * 0.1) verticalLines.push(x); // Even lower threshold for vertical lines
   }
 
   console.log(`🎯 Line detection: found ${horizontalLines.length} horizontal lines, ${verticalLines.length} vertical lines`);
@@ -151,7 +151,7 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
       return out;
     };
     const smoothCols = smooth(colDensity, 9);
-    const colThreshold = height * 0.08; // Lower threshold to catch more content
+    const colThreshold = height * 0.05; // Even lower threshold to catch more content
     const colRegions: Array<{ start: number; end: number; density: number }> = [];
     let runStart: number | null = null;
     for (let x = 0; x < width; x++) {
@@ -180,7 +180,7 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
       rowDensity[y] = count;
     }
     const smoothRows = smooth(rowDensity, 9);
-    const rowThreshold = width * 0.08; // Lower threshold
+    const rowThreshold = width * 0.05; // Even lower threshold
     let top = 0, bottom = height - 1;
     if (horizontalLines.length >= 2) {
       top = Math.min(...horizontalLines);

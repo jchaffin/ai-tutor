@@ -1,6 +1,34 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
 
-export const createTutorAgent = (pdfTitle: string, pdfContent: string): RealtimeAgent => {
+// Perform semantic search using embeddings
+async function performSemanticSearch(query: string, documentId?: string): Promise<Array<{text: string, similarity: number, page?: number, chunkId?: string, startIndex?: number, endIndex?: number}>> {
+  try {
+    const response = await fetch('/api/realtime/semantic-search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        query, 
+        documentId,
+        sessionId: `agent-${Date.now()}`,
+        utteranceId: `agent-utterance-${Date.now()}`
+      })
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log("🔍 Semantic search API response:", data);
+      return data.results || [];
+    } else {
+      console.log("🔍 Semantic search API error:", response.status, response.statusText);
+    }
+  } catch (error) {
+    console.log("🔍 Semantic search API error:", error);
+  }
+  
+  return [];
+}
+
+export const createTutorAgent = (pdfTitle: string, pdfContent: string, documentId?: string): RealtimeAgent => {
   console.log("🤖 Creating TutorAgent with:", { pdfTitle, pdfContentLength: pdfContent.length });
   console.log("🤖 TutorAgent will introduce itself as AI tutor for:", pdfTitle);
   
@@ -37,10 +65,17 @@ You are now a HIGHLY INTERACTIVE tutor that automatically highlights and navigat
 
 6. **SECTION DETECTION**: For section-related questions, use highlight_section_content to find and highlight entire sections, but time it with your speech flow.
 
+7. **MANDATORY SEMANTIC SEARCH**: You MUST use semantic_search tool during your speech to find conceptually related content. This is REQUIRED, not optional:
+   - When explaining concepts → call semantic_search("concept name")
+   - When discussing topics → call semantic_search("topic name") 
+   - When analyzing content → call semantic_search("analysis terms")
+   - Use this tool MULTIPLE TIMES during your response to find related content
+
 Citation and Highlighting Strategy:
-- FIRST: Use search_document to find relevant content and get context
+- FIRST: Use search_document to find exact keyword matches from the user's query
 - THEN: Begin your spoken response with page references
-- DURING your speech: Use highlight_content_ocr to highlight specific content using OCR detection for better accuracy
+- DURING your speech: Use semantic_search to find conceptually similar content as you explain concepts (MANDATORY)
+- DURING your speech: Use highlight_section_ocr to highlight section regions using OCR detection for better accuracy
 - AS you mention tables/figures: Use circle_table/circle_figure appropriately
 - Always refer to the document explicitly (say the page number)
 - Quote short phrases from the PDF that support your statements
@@ -60,14 +95,16 @@ ENHANCED MULTI-ANNOTATION SYSTEM: You can now make multiple annotations in a sin
 
 CORRECTED WORKFLOW: When the user asks about ANY topic:
 
-1. **CONTENT DISCOVERY ONLY**: Use search_document to find relevant content for your response
-   - This is ONLY for gathering information to answer the question
+1. **INITIAL KEYWORD SEARCH**: Use search_document to find exact matches from the user's query
+   - This finds content that contains the exact terms the user mentioned
+   - This is ONLY for gathering initial information to answer the question
    - Do NOT use this to highlight the user's query terms
    - Use this to find what you'll talk about in your response
 
 2. **RESPONSE PHASE**: Speak naturally about the content you found
    - Reference specific pages, quotes, tables, figures as you explain
    - **ALWAYS circle tables/figures when you mention them in your response**
+   - **DURING YOUR SPEECH**: Use semantic_search to find conceptually related content as you explain concepts
 
 3. **MANDATORY TABLE/FIGURE CIRCLING**: When you mention any table or figure in your response:
    - If you say "Table 1" → IMMEDIATELY call circle_table("Table 1")
@@ -78,6 +115,7 @@ CORRECTED WORKFLOW: When the user asks about ANY topic:
    - When you say "Table 1 shows..." → Table 1 gets circled
    - When you quote text → That text gets highlighted  
    - When you mention "[1]" → Citation gets researched
+   - **When you explain concepts → Use semantic_search to find related content**
    - All based on YOUR speech content, not the user's query
 
 MULTI-CITATION SUPPORT: When discussing multiple citations, call research_citation for each one mentioned.
@@ -85,26 +123,29 @@ MULTI-CITATION SUPPORT: When discussing multiple citations, call research_citati
 CORRECT EXAMPLE: User asks "tell me about the data"
 
 **WRONG APPROACH** (what it was doing):
-- Immediately annotate "data" from user query ❌
-- Highlight random occurrences of "data" ❌
+- Immediately annotate "data" from user query
+- Highlight random occurrences of "data"
 
 **CORRECT APPROACH** (what it should do):
-1. Use search_document("data") to find relevant content ✅
-2. Speak naturally: "The data is presented in Table 1 on page 5, which shows performance metrics. As you can see from the results, the MH-SSM model achieves 1.80 WER as reported in Smith et al. 2023..."
-3. **Speech system automatically**:
-   - Circles "Table 1" when you say it ✅
-   - Highlights specific quotes when you quote them ✅  
-   - Researches "Smith et al. 2023" when you mention it ✅
+1. Use search_document("data") to find exact keyword matches
+2. Speak naturally: "The data is presented in Table 1 on page 5, which shows performance metrics..."
+3. **DURING SPEECH**: Use semantic_search("performance metrics analysis") to find related content
+4. Continue: "As you can see from the results, the MH-SSM model achieves 1.80 WER as reported in Smith et al. 2023..."
+5. **Speech system automatically**:
+   - Circles "Table 1" when you say it
+   - Highlights specific quotes when you quote them 
+   - Researches "Smith et al. 2023" when you mention it
+   - Finds semantically related content as you explain concepts
 
 SPEECH-DRIVEN ANNOTATION: Only annotate what YOU reference in your response, not what the user asked about.
 
 REMOVED: All automatic annotation instructions. The agent should focus on providing helpful explanations.
 
 SIMPLE WORKFLOW:
-1. Use search_document to find relevant content
+1. Use search_document to find exact keyword matches from user query
 2. Respond with specific page references and quotes
-3. Use highlight_content_ocr to highlight content using OCR detection for better visual accuracy
-4. Always reference the PDF content you found
+3. DURING SPEECH: Use semantic_search to find conceptually related content as you explain
+4. Always reference and highlight the PDF content you found
 
 Navigation commands:
 - If the user says anything like "go to page N", "page N", or "open page N", IMMEDIATELY call navigate_to_page with that page number.
@@ -123,11 +164,72 @@ Guidelines:
 - Always be accurate and cite the document when making claims
 - ALWAYS respond with voice output - never be silent
 - **CONTINUOUSLY highlight relevant content as you speak about it**
-- **ALWAYS check for sections first using highlight_section_content**
+
 
 Remember: You're having a voice conversation, so keep responses natural and spoken-friendly rather than overly formal or written-style. You are now a VISUAL tutor that makes the document come alive with real-time highlighting. ALWAYS check if the user is asking about a section first! If unsure, call list_sections to see available sections, then navigate_to_section.`,
     
     tools: [
+      // semantic search
+      tool({
+        name: 'semantic_search',
+        description: 'Perform semantic search using embeddings to find conceptually similar content in the document. Use this DURING your speech when explaining concepts to find related content, not for initial user query matching.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'The concept or idea to search for semantically (use concepts you are explaining, not user query terms)'
+            }
+          },
+          required: ['query'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          console.log("🔍 SEMANTIC SEARCH TOOL CALLED:", input);
+          const { query } = input;
+          
+          try {
+            console.log(`🔍 Performing semantic search for: "${query}" with documentId: ${documentId}`);
+            const semanticResults = await performSemanticSearch(query, documentId);
+            console.log(`🔍 Semantic search returned ${semanticResults.length} results:`, semanticResults);
+            
+            if (semanticResults && semanticResults.length > 0) {
+              console.log(`🔍 Found ${semanticResults.length} semantic matches for "${query}"`);
+              
+              // Return results for client-side processing
+              return {
+                success: true,
+                results: semanticResults.map(r => ({
+                  text: r.text.substring(0, 200) + (r.text.length > 200 ? '...' : ''),
+                  page: r.page,
+                  similarity: r.similarity,
+                  chunkId: r.chunkId,
+                  startIndex: r.startIndex,
+                  endIndex: r.endIndex
+                })),
+                message: `Found ${semanticResults.length} semantically similar content pieces`,
+                query: query,
+                shouldHighlight: true
+              };
+            } else {
+              console.log(`🔍 No semantic matches found for "${query}"`);
+              return {
+                success: false,
+                results: [],
+                message: 'No semantically similar content found'
+              };
+            }
+          } catch (error) {
+            console.error("🔍 Semantic search tool error:", error);
+            return {
+              success: false,
+              error: 'Semantic search failed',
+              message: 'Unable to perform semantic search'
+            };
+          }
+        }
+      }),
+      // search document
       tool({
         name: 'search_document',
         description: 'Search for specific terms or concepts in the PDF document',
@@ -176,6 +278,31 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             // Prioritize the original query first (longer phrases highlight better)
             variants.add(base);
             
+            // Use semantic search with embeddings for better matching
+            try {
+              const semanticResults = await performSemanticSearch(query, documentId);
+              if (semanticResults && semanticResults.length > 0) {
+                // Instead of adding keywords, dispatch semantic highlight events for specific fragments
+                semanticResults.forEach(result => {
+                  if (result.text && result.text.length > 10) {
+                    // Dispatch event to highlight this specific semantically similar fragment
+                    if (typeof window !== 'undefined') {
+                      window.dispatchEvent(new CustomEvent('tutor-highlight-semantic-fragment', {
+                        detail: {
+                          text: result.text,
+                          page: result.page,
+                          similarity: result.similarity,
+                          query: query
+                        }
+                      }));
+                    }
+                  }
+                });
+              }
+            } catch (error) {
+              console.log("🔍 Semantic search failed, falling back to keyword search:", error);
+            }
+            
             // Only add variations if the original is short (to avoid over-fragmentation)
             if (base.length <= 15) {
               // Handle hyphenated terms
@@ -211,14 +338,6 @@ Remember: You're having a voice conversation, so keep responses natural and spok
                 variants.add(`${letter}_${number}`); // Underscore notation
                 variants.add(`${letter}${number}`); // Original
               }
-            }
-            
-            // Domain-specific expansions
-            if (/^mh\s*-?\s*ssm[s]?$/i.test(base) || /multi\s*head\s*state\s*space\s*model/i.test(base)) {
-              ['mh-ssm','mhssm','mh ssm','multi-head state space model','multi head state space model','multihead state space model'].forEach(v=>variants.add(v));
-            }
-            if (/^ssm[s]?$/i.test(base) || /state\s*space\s*model/i.test(base)) {
-              ['ssm','ssms','state space model','state space models'].forEach(v=>variants.add(v));
             }
             // Create keyword objects for better phrase matching
             const keywordObjects = Array.from(variants).map((v) => ({ 
@@ -321,291 +440,7 @@ Remember: You're having a voice conversation, so keep responses natural and spok
           };
         }
       }),
-
-      tool({
-        name: 'highlight_section_content',
-        description: 'Detect if a term is a section title and highlight the ENTIRE section content using multiple relevant keywords to capture most of the section text',
-        parameters: {
-          type: 'object',
-          properties: {
-            term: {
-              type: 'string',
-              description: 'The term to check if it\'s a section title and highlight'
-            }
-          },
-          required: ['term'],
-          additionalProperties: false
-        },
-        execute: async (input: any) => {
-          console.log("🎯 SECTION CONTENT HIGHLIGHT TOOL CALLED:", input);
-          const { term } = input;
-          
-          if (typeof window !== 'undefined' && (window as any).__pdfOutline) {
-            const outline: Array<{ title: string; pageIndex: number }> = (window as any).__pdfOutline || [];
-            const searchTerm = term.toLowerCase().trim();
-            
-            // Find exact or partial section matches with flexible matching
-            const sectionMatch = outline.find(s => {
-              const sectionTitle = s.title.toLowerCase().trim();
-              const userTerm = searchTerm.toLowerCase().trim();
-              
-              // Exact match
-              if (sectionTitle === userTerm) return true;
-              
-              // Bidirectional contains
-              if (sectionTitle.includes(userTerm) || userTerm.includes(sectionTitle)) return true;
-              
-              // Handle common variations
-              const variations = {
-                'conclusion': ['conclusions', 'concluding', 'summary'],
-                'intro': ['introduction', 'introductory'],
-                'method': ['methods', 'methodology'],
-                'result': ['results'],
-                'experiment': ['experiments', 'experimental'],
-                'discussion': ['discussions'],
-                'reference': ['references', 'bibliography'],
-                'appendix': ['appendices']
-              };
-              
-              // Check if user term matches any variation
-              for (const [key, values] of Object.entries(variations)) {
-                if (userTerm === key && values.some(v => sectionTitle.includes(v))) return true;
-                if (values.includes(userTerm) && sectionTitle.includes(key)) return true;
-              }
-              
-              return false;
-            });
-            
-             if (sectionMatch) {
-                console.log(`🎯 HIGHLIGHTING ENTIRE SECTION: "${sectionMatch.title}" on page ${sectionMatch.pageIndex + 1}`);
-                
-                // Navigate to the section page
-                try {
-                  if ((window as any).pdfJumpToPage) {
-                    (window as any).pdfJumpToPage(sectionMatch.pageIndex + 1);
-                  } else {
-                    window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: sectionMatch.pageIndex } }));
-                  }
-                } catch {}
-                
-                // Highlight the entire section content using multiple relevant terms
-                const sectionRequestId = `section-content-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                
-                // Extract multiple key terms from the section title and create comprehensive search
-                const titleWords = sectionMatch.title.toLowerCase().split(/\s+/).filter(word => 
-                  word.length > 2 && !['the', 'and', 'for', 'with', 'this', 'that', 'from', 'are', 'was', 'were', 'been', 'have', 'has', 'had'].includes(word)
-                );
-                
-                // Strategy: Instead of highlighting keywords, find and highlight actual sentences in the section
-                // Use a broader search that captures section content, not just title words
-                
-                const searchTerms = [];
-                
-                // Only use specific, meaningful terms - NO common words
-                searchTerms.push({ keyword: term.toLowerCase(), matchCase: false });
-                
-                // Add only the section title itself for title highlighting
-                searchTerms.push({ keyword: sectionMatch.title, matchCase: false });
-                
-                console.log(`🎯 Highlighting section content with common words:`, searchTerms);
-                
-                window.dispatchEvent(new CustomEvent('pdf-search-request', {
-                  detail: { requestId: sectionRequestId, keywords: searchTerms }
-                }));
-
-                return {
-                  success: true,
-                  section: term,
-                  page: sectionMatch.pageIndex + 1,
-                  message: `Highlighted section content for "${term}" on page ${sectionMatch.pageIndex + 1} using key term "${titleWords[0] || term}"`
-                };
-              } else {
-              return {
-                success: false,
-                term,
-                message: `No section found matching "${term}". Try searching for the content instead.`
-              };
-            }
-          }
-          
-          return {
-            success: false,
-            term,
-            message: "PDF outline not available. Cannot detect sections."
-          };
-        }
-      }),
-
-      tool({
-        name: 'circle_table',
-        description: 'Circle a table using OCR (Optical Character Recognition) to detect actual visual table boundaries. This tool analyzes the PDF page as an image to find precise table structure, not just text patterns.',
-        parameters: {
-          type: 'object',
-          properties: {
-            label: { type: 'string', description: 'The table label to circle, e.g., "Table 1"' }
-          },
-          required: ['label'],
-          additionalProperties: false
-        },
-        execute: async (input: any) => {
-          const label = String(input?.label || '').trim();
-          if (!label) {
-            return { success: false, message: 'Missing table label' };
-          }
-          if (typeof window !== 'undefined') {
-            // Add delay to sync with speech timing
-            setTimeout(() => {
-              window.dispatchEvent(new CustomEvent('tutor-circle-table', { detail: { label } }));
-            }, 300); // 300ms delay for table references
-            return { success: true, label, message: `Will circle ${label} using OCR visual analysis in 300ms` };
-          }
-          return { success: false, label, message: 'Not in browser context' };
-        }
-      }),
-
-      tool({
-        name: 'circle_figure',
-        description: 'Circle a figure label by searching for its caption (e.g., "Figure 2") and drawing a circle overlay around it',
-        parameters: {
-          type: 'object',
-          properties: {
-            label: { type: 'string', description: 'The figure label to circle, e.g., "Figure 2"' }
-          },
-          required: ['label'],
-          additionalProperties: false
-        },
-        execute: async (input: any) => {
-          const label = String(input?.label || '').trim();
-          if (!label) return { success: false, message: 'Missing figure label' };
-          if (typeof window !== 'undefined') {
-            // Add delay to sync with speech timing
-            setTimeout(() => {
-              window.dispatchEvent(new CustomEvent('tutor-circle-figure', { detail: { label } }));
-            }, 300); // 300ms delay for figure references
-            return { success: true, label, message: `Will circle ${label} in 300ms` };
-          }
-          return { success: false, label, message: 'Not in browser context' };
-        }
-      }),
-
-      tool({
-        name: 'research_citation',
-        description: 'Research a citation mentioned in the document by dispatching a research agent to look up the paper/reference',
-        parameters: {
-          type: 'object',
-          properties: {
-            citation: {
-              type: 'string',
-              description: 'The citation text or reference number (e.g., "[1]", "[Smith et al., 2023]", "Johnson 2022")'
-            },
-            context: {
-              type: 'string',
-              description: 'The context in which the citation was mentioned for better research'
-            }
-          },
-          required: ['citation'],
-          additionalProperties: false
-        },
-        execute: async (input: any) => {
-          const { citation, context } = input;
-          console.log("📚 CITATION RESEARCH TOOL CALLED:", { citation, context });
-          
-          if (!citation || typeof citation !== 'string') {
-            return { success: false, message: 'Invalid citation provided' };
-          }
-
-          if (typeof window !== 'undefined') {
-            // Dispatch event to trigger citation research
-            const researchRequestId = `citation-research-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            
-            console.log("📚 Dispatching citation research request:", { citation, context, researchRequestId });
-            
-            window.dispatchEvent(new CustomEvent('tutor-citation-research', {
-              detail: { 
-                citation: citation.trim(),
-                context: context || '',
-                requestId: researchRequestId
-              }
-            }));
-            
-            return {
-              success: true,
-              citation,
-              message: `Researching citation: ${citation}`
-            };
-          }
-          
-          return { success: false, message: 'Citation research not available in current context' };
-        }
-      }),
-
-      tool({
-        name: 'navigate_to_section',
-        description: 'Navigate to a specific section in the PDF document',
-        parameters: {
-          type: 'object',
-          properties: {
-            section: {
-              type: 'string',
-              description: 'The section title to navigate to (partial match is fine)'
-            }
-          },
-          required: ['section'],
-          additionalProperties: false
-        },
-        execute: async (input: any) => {
-          console.log("📖 SECTION NAVIGATE TOOL CALLED:", input);
-          const { section } = input;
-          let targetPage = 1;
-
-          if (typeof window !== 'undefined') {
-            const outline: Array<{ title: string; pageIndex: number }> = (window as any).__pdfOutline || [];
-            if (outline.length > 0) {
-              const searchTerm = section.toLowerCase().trim();
-              // Try exact match first, then partial matches
-              let match = outline.find(s => 
-                s.title.toLowerCase() === searchTerm ||
-                s.title.toLowerCase().includes(searchTerm) || 
-                searchTerm.includes(s.title.toLowerCase())
-              );
-              
-              // If no match, try to find numbered sections (e.g., "5.1" should find "5" or "5.1")
-              if (!match && /\d/.test(searchTerm)) {
-                const numMatch = searchTerm.match(/(\d+(?:\.\d+)?)/);
-                if (numMatch) {
-                  const num = numMatch[1];
-                  match = outline.find(s => 
-                    s.title.includes(num) || 
-                    s.title.match(new RegExp(`\\b${num.replace('.', '\\.')}\\b`))
-                  );
-                }
-              }
-              
-              if (match) {
-                targetPage = match.pageIndex + 1;
-                console.log(`📖 Found section "${match.title}" on page ${targetPage}`);
-              }
-            }
-          }
-
-          try {
-            if ((window as any).pdfJumpToPage) {
-              (window as any).pdfJumpToPage(targetPage);
-            } else {
-              const zeroBased = Math.max(0, targetPage - 1);
-              window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: zeroBased } }));
-            }
-          } catch {}
-
-          return { 
-            success: true, 
-            section,
-            page: targetPage,
-            message: `Navigated to section "${section}" on page ${targetPage}` 
-          };
-        }
-      }),
-
+      // get page count
       tool({
         name: 'get_page_count',
         description: 'Return the total number of pages in the currently open PDF',
@@ -628,7 +463,7 @@ Remember: You're having a voice conversation, so keep responses natural and spok
           return { success: true, pages: numPages ?? 0 };
         }
       }),
-
+      // navigate to page
       tool({
         name: 'navigate_to_page',
         description: 'Navigate to a specific page in the PDF document',
@@ -683,44 +518,57 @@ Remember: You're having a voice conversation, so keep responses natural and spok
           };
         }
       }),
-
+      // list sections
       tool({
-        name: 'highlight_content_ocr',
-        description: 'Highlight content using OCR-based detection to find visual boundaries around text, sections, or concepts. More accurate than text-based highlighting.',
+        name: 'list_sections',
+        description: 'Return the list of detected document sections (title and page) from the viewer',
+        parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+        execute: async () => {
+          if (typeof window !== 'undefined') {
+            const outline = (window as any).__pdfOutline || [];
+            return { success: true, sections: outline.map((s: any) => ({ title: s.title, page: s.pageIndex + 1 })) };
+          }
+          return { success: false, sections: [] };
+        }
+      }),
+      // navigate to section
+      tool({
+        name: 'navigate_to_section',
+        description: 'Navigate to a section by number (e.g., 5.1) or title (e.g., Baselines). Also highlights the section title.',
         parameters: {
           type: 'object',
-          properties: {
-            content: {
-              type: 'string',
-              description: 'The text content to highlight using OCR (e.g., "Inter-Head Gating", "Equation 2", "Section 3.2")'
-            },
-            page: {
-              type: 'number',
-              description: 'The page number where this content appears'
-            }
-          },
-          required: ['content'],
+          properties: { query: { type: 'string', description: 'Section number or title' } },
+          required: ['query'],
           additionalProperties: false
         },
         execute: async (input: any) => {
-          const { content, page } = input;
-          if (!content || typeof content !== 'string') {
-            return { success: false, message: 'Missing or invalid content text' };
+          const qRaw = String(input?.query || '').trim();
+          if (!qRaw) return { success: false, message: 'Missing section query' };
+          if (typeof window === 'undefined') return { success: false, message: 'Not in browser context' };
+          const outline: Array<{ title: string; pageIndex: number }> = (window as any).__pdfOutline || [];
+          const q = qRaw.toLowerCase();
+          const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+          const numLike = q.match(/^\d+(?:\.\d+)*$/);
+          let match = null as any;
+          if (numLike) {
+            match = outline.find((s) => normalize(s.title).startsWith(q));
           }
-          
-          if (typeof window !== 'undefined') {
-            // Add a small delay to better sync with speech timing
-            setTimeout(() => {
-              window.dispatchEvent(new CustomEvent('tutor-highlight-content-ocr', {
-                detail: { content: content.trim(), page }
-              }));
-            }, 200); // 200ms delay for content highlighting
-            return { success: true, content, message: `Will highlight "${content}" using OCR detection in 200ms` };
+          if (!match) {
+            match = outline.find((s) => normalize(s.title).includes(q) || q.includes(normalize(s.title)));
           }
-          return { success: false, content, message: 'Not in browser context' };
+          if (match) {
+            try { (window as any).pdfJumpToPage ? (window as any).pdfJumpToPage(match.pageIndex + 1) : window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: match.pageIndex } })); } catch {}
+            const requestId = `section-nav-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            window.dispatchEvent(new CustomEvent('pdf-search-request', { detail: { requestId, keywords: [{ keyword: match.title, matchCase: false }] } }));
+            return { success: true, page: match.pageIndex + 1, section: match.title };
+          }
+          // fallback: search for the query text directly
+          const requestId = `section-fallback-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          window.dispatchEvent(new CustomEvent('pdf-search-request', { detail: { requestId, keywords: [{ keyword: qRaw, matchCase: false }] } }));
+          return { success: false, message: 'Section not found in outline; highlighted search results instead.' };
         }
-      }),
-
+      }),      
+      // highlight quote
       tool({
         name: 'highlight_quote',
         description: 'Highlight an exact quote from the document that you are referencing in your response',
@@ -761,7 +609,59 @@ Remember: You're having a voice conversation, so keep responses natural and spok
           return { success: false, message: 'Quote too short or not in browser context' };
         }
       }),
-
+      // circle table
+      tool({
+        name: 'circle_table',
+        description: 'Circle a table using OCR (Optical Character Recognition) to detect actual visual table boundaries. This tool analyzes the PDF page as an image to find precise table structure, not just text patterns.',
+        parameters: {
+          type: 'object',
+          properties: {
+            label: { type: 'string', description: 'The table label to circle, e.g., "Table 1"' }
+          },
+          required: ['label'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          const label = String(input?.label || '').trim();
+          if (!label) {
+            return { success: false, message: 'Missing table label' };
+          }
+          if (typeof window !== 'undefined') {
+            // Add delay to sync with speech timing
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('tutor-circle-table', { detail: { label } }));
+            }, 300); // 300ms delay for table references
+            return { success: true, label, message: `Will circle ${label} using OCR visual analysis in 300ms` };
+          }
+          return { success: false, label, message: 'Not in browser context' };
+        }
+      }),
+      // circle figure
+      tool({
+        name: 'circle_figure',
+        description: 'Circle a figure label by searching for its caption (e.g., "Figure 2") and drawing a circle overlay around it',
+        parameters: {
+          type: 'object',
+          properties: {
+            label: { type: 'string', description: 'The figure label to circle, e.g., "Figure 2"' }
+          },
+          required: ['label'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          const label = String(input?.label || '').trim();
+          if (!label) return { success: false, message: 'Missing figure label' };
+          if (typeof window !== 'undefined') {
+            // Add delay to sync with speech timing
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('tutor-circle-figure', { detail: { label } }));
+            }, 300); // 300ms delay for figure references
+            return { success: true, label, message: `Will circle ${label} in 300ms` };
+          }
+          return { success: false, label, message: 'Not in browser context' };
+        }
+      }),
+      // create annotation
       tool({
         name: 'create_annotation',
         description: 'Create a visual annotation on the PDF',
@@ -847,57 +747,58 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             message: `Created ${type} annotation on page ${page}${text ? `: ${text}` : ''}` 
           };
         }
-      }),
-
+      }),      
+      // research citation
       tool({
-        name: 'list_sections',
-        description: 'Return the list of detected document sections (title and page) from the viewer',
-        parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
-        execute: async () => {
-          if (typeof window !== 'undefined') {
-            const outline = (window as any).__pdfOutline || [];
-            return { success: true, sections: outline.map((s: any) => ({ title: s.title, page: s.pageIndex + 1 })) };
-          }
-          return { success: false, sections: [] };
-        }
-      }),
-
-      tool({
-        name: 'navigate_to_section',
-        description: 'Navigate to a section by number (e.g., 5.1) or title (e.g., Baselines). Also highlights the section title.',
+        name: 'research_citation',
+        description: 'Research a citation mentioned in the document by dispatching a research agent to look up the paper/reference',
         parameters: {
           type: 'object',
-          properties: { query: { type: 'string', description: 'Section number or title' } },
-          required: ['query'],
+          properties: {
+            citation: {
+              type: 'string',
+              description: 'The citation text or reference number (e.g., "[1]", "[Smith et al., 2023]", "Johnson 2022")'
+            },
+            context: {
+              type: 'string',
+              description: 'The context in which the citation was mentioned for better research'
+            }
+          },
+          required: ['citation'],
           additionalProperties: false
         },
         execute: async (input: any) => {
-          const qRaw = String(input?.query || '').trim();
-          if (!qRaw) return { success: false, message: 'Missing section query' };
-          if (typeof window === 'undefined') return { success: false, message: 'Not in browser context' };
-          const outline: Array<{ title: string; pageIndex: number }> = (window as any).__pdfOutline || [];
-          const q = qRaw.toLowerCase();
-          const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
-          const numLike = q.match(/^\d+(?:\.\d+)*$/);
-          let match = null as any;
-          if (numLike) {
-            match = outline.find((s) => normalize(s.title).startsWith(q));
+          const { citation, context } = input;
+          console.log("📚 CITATION RESEARCH TOOL CALLED:", { citation, context });
+          
+          if (!citation || typeof citation !== 'string') {
+            return { success: false, message: 'Invalid citation provided' };
           }
-          if (!match) {
-            match = outline.find((s) => normalize(s.title).includes(q) || q.includes(normalize(s.title)));
+
+          if (typeof window !== 'undefined') {
+            // Dispatch event to trigger citation research
+            const researchRequestId = `citation-research-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            
+            console.log("📚 Dispatching citation research request:", { citation, context, researchRequestId });
+            
+            window.dispatchEvent(new CustomEvent('tutor-citation-research', {
+              detail: { 
+                citation: citation.trim(),
+                context: context || '',
+                requestId: researchRequestId
+              }
+            }));
+            
+            return {
+              success: true,
+              citation,
+              message: `Researching citation: ${citation}`
+            };
           }
-          if (match) {
-            try { (window as any).pdfJumpToPage ? (window as any).pdfJumpToPage(match.pageIndex + 1) : window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: match.pageIndex } })); } catch {}
-            const requestId = `section-nav-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            window.dispatchEvent(new CustomEvent('pdf-search-request', { detail: { requestId, keywords: [{ keyword: match.title, matchCase: false }] } }));
-            return { success: true, page: match.pageIndex + 1, section: match.title };
-          }
-          // fallback: search for the query text directly
-          const requestId = `section-fallback-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-          window.dispatchEvent(new CustomEvent('pdf-search-request', { detail: { requestId, keywords: [{ keyword: qRaw, matchCase: false }] } }));
-          return { success: false, message: 'Section not found in outline; highlighted search results instead.' };
+          
+          return { success: false, message: 'Citation research not available in current context' };
         }
-      })
+      }),      
     ]
   });
 };

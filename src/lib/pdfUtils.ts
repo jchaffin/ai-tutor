@@ -1,4 +1,5 @@
 import { readFile } from 'fs/promises'
+import { join } from 'path'
 import pdfParse from '@jchaffin/pdf-parse'
 
 export interface PDFExtractionResult {
@@ -111,8 +112,16 @@ export async function extractTextFromPDF(filePath: string): Promise<PDFExtractio
       console.log('📄 PDF fetched successfully, size:', dataBuffer.length, 'bytes')
     } else {
       // Read from local file
-      console.log('📄 Reading PDF from local path:', filePath)
-      dataBuffer = await readFile(filePath)
+      let actualFilePath = filePath
+      
+      // If it's a relative path starting with /uploads/, make it absolute
+      if (filePath.startsWith('/uploads/')) {
+        const filename = filePath.replace('/uploads/', '')
+        actualFilePath = join(process.cwd(), 'uploads', filename)
+      }
+      
+      console.log('📄 Reading PDF from local path:', actualFilePath)
+      dataBuffer = await readFile(actualFilePath)
       console.log('📄 PDF read successfully, size:', dataBuffer.length, 'bytes')
     }
     

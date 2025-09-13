@@ -214,20 +214,42 @@ export default function ChatInterface({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // Listen to agent speech transcription for real-time annotation
+  // Listen to tutor transcript deltas for real-time annotation (normalized)
   useEffect(() => {
-    const handleSpeechTranscription = (event: any) => {
-      const transcript = event?.delta || event?.transcript || '';
+    const handleTutorTranscript = (event: any) => {
+      const detail = event?.detail || {};
+      const transcript: string = detail.delta || detail.transcript || '';
       if (!transcript || typeof transcript !== 'string') return;
-      
-      console.log('🎤 Agent speech delta:', transcript);
+
+      console.log('🎤 Tutor transcript delta:', transcript);
+
+      // Accumulate buffer and trigger throttled semantic search updates tied to speech
+      try {
+        const trimmed = transcript.trim();
+        if (trimmed) {
+          const needsSpace = speechBufferRef.current && !/\s$/.test(speechBufferRef.current || '');
+          speechBufferRef.current = (speechBufferRef.current || '') + (needsSpace ? ' ' : '') + trimmed;
+          const endsSentence = /[.!?]$/.test(trimmed);
+          if ((speechBufferRef.current || '').length >= 40 || endsSentence) {
+            scheduleSemanticUpdate();
+          }
+        }
+        // On utterance completion, do a final update and reset buffer
+        const isComplete = !!detail.isComplete || !!detail.isUtterance;
+        if (isComplete) {
+          const finalQ = (speechBufferRef.current || '').trim();
+          if (finalQ.length >= 20) runSemanticSearch(finalQ);
+          speechBufferRef.current = '';
+        }
+      } catch (e) {
+        console.warn('Semantic buffering failed:', e);
+      }
       
       // Analyze the speech for citation patterns
       const citationMatches = transcript.match(/\[(\d+)\]|([A-Z][a-z]+\s+et\s+al\.?,?\s+\d{4})|([A-Z][a-z]+,?\s+\d{4})/g);
       if (citationMatches) {
         citationMatches.forEach(citation => {
           console.log('📚 Detected citation in speech:', citation);
-          // Trigger citation research
           window.dispatchEvent(new CustomEvent('tutor-citation-research', {
             detail: { 
               citation: citation.trim(),
@@ -237,7 +259,7 @@ export default function ChatInterface({
           }));
         });
       }
-      
+
       // Analyze speech for table/figure references
       const tableMatches = transcript.match(/Table\s+\d+/gi);
       if (tableMatches) {
@@ -247,10 +269,10 @@ export default function ChatInterface({
             window.dispatchEvent(new CustomEvent('tutor-circle-table', {
               detail: { label: table.trim() }
             }));
-          }, 200); // Small delay to sync with speech
+          }, 200);
         });
       }
-      
+
       const figureMatches = transcript.match(/Figure\s+\d+/gi);
       if (figureMatches) {
         figureMatches.forEach(figure => {
@@ -262,12 +284,12 @@ export default function ChatInterface({
           }, 200);
         });
       }
-      
+
       // Analyze speech for direct quotes (text in quotes)
       const quoteMatches = transcript.match(/"([^"]+)"/g);
       if (quoteMatches) {
         quoteMatches.forEach(quote => {
-          const cleanQuote = quote.replace(/"/g, '').trim();
+          const cleanQuote = quote.replace(/\"/g, '').replace(/"/g, '').trim();
           if (cleanQuote.length > 10) {
             console.log('💬 Detected quote in speech:', cleanQuote);
             setTimeout(() => {
@@ -280,13 +302,9 @@ export default function ChatInterface({
       }
     };
 
-    // Listen to speech transcription events
-    window.addEventListener('response.audio_transcript.delta', handleSpeechTranscription);
-    window.addEventListener('response.audio_transcript.done', handleSpeechTranscription);
-    
+    window.addEventListener('tutor-transcript-delta', handleTutorTranscript);
     return () => {
-      window.removeEventListener('response.audio_transcript.delta', handleSpeechTranscription);
-      window.removeEventListener('response.audio_transcript.done', handleSpeechTranscription);
+      window.removeEventListener('tutor-transcript-delta', handleTutorTranscript);
     };
   }, []);
 
@@ -419,7 +437,7 @@ export default function ChatInterface({
       const safeTitle = pdfTitle && pdfTitle.trim() ? pdfTitle.trim() : 'PDF Document';
       console.log("🤖 Using safe title:", safeTitle);
 
-      const tutorAgent = createTutorAgent(safeTitle, pdfContent)
+      const tutorAgent = createTutorAgent(safeTitle, pdfContent, documentId)
       
       await connect({
         getEphemeralKey: () => Promise.resolve(ephemeralKey),
@@ -551,6 +569,83 @@ export default function ChatInterface({
   // Detect references like "Table 1" (optionally with a page mention) in assistant outputs
   const lastProcessedMsgIdRef = useRef<string | null>(null)
   const lastProcessedTranscriptIdRef = useRef<string | null>(null)
+
+  // Dynamic semantic-highlighting state for tutor speech
+  const speechBufferRef = useRef<string>('')
+  const semanticTimerRef = useRef<number | null>(null)
+
+  const runSemanticSearch = async (query: string) => {
+    try {
+      const q = (query || '').trim()
+      if (q.length < 20) return
+      const res = await fetch('/api/realtime/semantic-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: q,
+          documentId,
+          sessionId: `agent-${Date.now()}`,
+          utteranceId: `agent-utt-${Date.now()}`,
+        }),
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      let results: Array<any> = Array.isArray(data?.results) ? data.results : []
+
+      // Prefer highlighting within the active section/page range if provided by the viewer
+      try {
+        const active: any = (window as any).__activeSection
+        if (active && (typeof active.startPage === 'number' || typeof active.endPage === 'number' || typeof active.page === 'number')) {
+          const start = Number(active.startPage ?? active.page ?? active.start ?? 1)
+          const end = Number(active.endPage ?? active.page ?? active.end ?? start)
+          results = results.filter((r: any) => typeof r?.page === 'number' && r.page >= start && r.page <= end)
+        }
+      } catch {}
+
+      // Accumulate highlights during an utterance; do NOT clear on every delta
+      const top = results.slice(0, 5)
+      const stopwords = new Set(['the','and','for','with','this','that','from','are','was','were','been','have','has','had','into','onto','over','very','more','most','such','than','then','also','can','may','might','will','would','could'])
+      const keywords = q
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter(w => w.length > 3 && !stopwords.has(w))
+        .slice(0, 5)
+
+      top.forEach((r: any) => {
+        const raw = typeof r?.text === 'string' ? r.text : ''
+        if (!raw) return
+        const normalized = raw.replace(/\s+/g, ' ').trim()
+        // Prefer a longer snippet around a keyword to maximize perceived coverage
+        let best = normalized.slice(0, 260)
+        for (const kw of keywords) {
+          const idx = normalized.toLowerCase().indexOf(kw)
+          if (idx >= 0) {
+            const start = Math.max(0, idx - 100)
+            const end = Math.min(normalized.length, idx + kw.length + 160)
+            best = normalized.slice(start, end)
+            break
+          }
+        }
+        // Avoid cutting in the middle of words
+        best = best.replace(/^\S+\s/, '').replace(/\s\S+$/, '')
+        // Dispatch concise, matchable fragment
+        window.dispatchEvent(new CustomEvent('tutor-highlight-semantic-fragment', {
+          detail: { text: best, page: r.page, similarity: r.similarity, query: q },
+        }))
+      })
+    } catch (e) {
+      console.error('🔍 Semantic highlight error:', e)
+    }
+  }
+
+  const scheduleSemanticUpdate = () => {
+    try { if (semanticTimerRef.current) window.clearTimeout(semanticTimerRef.current) } catch {}
+    semanticTimerRef.current = window.setTimeout(() => {
+      const q = (speechBufferRef.current || '').trim()
+      if (q.length >= 20) runSemanticSearch(q)
+    }, 600)
+  }
 
   const wordsToNumber = (word: string): number | null => {
     const map: Record<string, number> = {
