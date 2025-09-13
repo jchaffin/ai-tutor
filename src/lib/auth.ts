@@ -2,11 +2,21 @@ import NextAuth from 'next-auth'
 import type { Session, User } from 'next-auth'
 import type { JWT } from 'next-auth/jwt'
 import CredentialsProvider from 'next-auth/providers/credentials'
+import GoogleProvider from 'next-auth/providers/google'
+// import AppleProvider from 'next-auth/providers/apple'
 import bcrypt from 'bcryptjs'
 import { prisma } from './prisma'
 
 const authConfig = {
   providers: [
+    GoogleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    }),
+    // AppleProvider({
+    //   clientId: process.env.APPLE_ID!,
+    //   clientSecret: process.env.APPLE_SECRET!,
+    // }),
     CredentialsProvider({
       id: 'credentials',
       name: 'credentials',

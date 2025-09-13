@@ -1,26 +1,48 @@
 @import "tailwindcss";
 
+/* Simple light theme */
 :root {
+  --brand: #3a3259; 
+  --secondary: #3860f6;
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #0f172a; /* slate-900 */
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
 
-@media (prefers-color-scheme: dark) {
+/* Light mode fallback */
+@media (prefers-color-scheme: light) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --foreground: #0f172a;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
+/* Remove app-wide gradient */
+.app-gradient { background: var(--background); color: var(--foreground); }
+
+/* Neutral cards */
+.glass-panel { background: #ffffff; border: 1px solid #e5e7eb; }
+.card-glass { background: #ffffff; border: 1px solid #e5e7eb; }
+
+/* Buttons */
+.primary-btn { background: var(--brand); color: #fff; border-radius: 9999px; transition: filter 150ms ease; cursor: pointer; }
+.primary-btn:hover { filter: brightness(1.05); }
+.primary-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.secondary-btn { background: transparent; border: 1px solid #e5e7eb; color: #0f172a; border-radius: 9999px; cursor: pointer; }
+.secondary-btn:hover { background: #f8fafc; }
+
+/* Custom utilities */
+.text-brand { color: var(--brand); }
+.bg-brand { background-color: var(--brand); }
+.text-secondary { color: var(--secondary); }
+.bg-secondary { background-color: var(--secondary); }
+
+/* Ensure all buttons show pointer by default */
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+/* Subtle scrollbars */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.35); border-radius: 9999px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.5); }
+
+body { background: var(--background); color: var(--foreground); font-family: var(--font-poppins), Arial, Helvetica, sans-serif; }

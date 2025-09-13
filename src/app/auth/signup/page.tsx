@@ -56,8 +56,17 @@ export default function SignUp() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="min-h-screen flex items-center justify-center bg-white">
       <div className="max-w-md w-full space-y-8">
+        {/* Banner */}
+        <div className="text-center space-y-3">
+          <h1 className="text-4xl font-bold" style={{ color: 'var(--brand)' }}>AI Tutor</h1>
+          <p className="text-lg leading-relaxed" style={{ color: 'var(--brand)' }}>
+            Create AI generated notes from PDFs, PowerPoints, and Lecture Videos, automatically!
+          </p>
+        </div>
+
+        {/* Sign Up Form */}
         <div>
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
             Create your account

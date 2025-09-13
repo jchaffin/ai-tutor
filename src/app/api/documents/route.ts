@@ -18,6 +18,7 @@ export async function GET(request: NextRequest) {
         id: true,
         title: true,
         filename: true,
+        filepath: true,
         createdAt: true,
       },
       orderBy: {

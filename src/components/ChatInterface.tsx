@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useRef, useState, useEffect, useMemo } from 'react'
-import { Send, Volume2, VolumeX, Mic } from 'lucide-react'
+import { Send, Volume2, VolumeX, Mic, X, History, Play, Square } from 'lucide-react'
 import { useTranscript } from '@/contexts/TranscriptContext'
 import { useRealtimeSession } from '@/hooks/useRealtimeSession'
 import { useHandleSessionHistory } from '@/hooks/useHandleSessionHistory'
@@ -9,6 +9,7 @@ import { createTutorAgent } from '@/lib/agents/tutorAgent'
 import { createCitationResearchAgent } from '@/lib/agents/citationAgent'
 import { SessionStatus, PDFAnnotation } from '@/types'
 import ReactMarkdown from "react-markdown"
+import { Button } from '@/components/ui/Button'
 
 interface Message {
   id: string
@@ -291,8 +292,8 @@ export default function ChatInterface({
 
   // Handle citation research requests
   useEffect(() => {
-    const handleCitationResearch = async (event: CustomEvent) => {
-      const { citation, context, requestId } = event.detail || {};
+    const handleCitationResearch = (event: Event) => {
+      const { citation, context, requestId } = (event as CustomEvent).detail || {};
       console.log('📚 Citation research request received:', { citation, context, requestId });
       
       if (!citation) {
@@ -333,9 +334,9 @@ export default function ChatInterface({
       }
     };
 
-    window.addEventListener('tutor-citation-research', handleCitationResearch as EventListener);
+    window.addEventListener('tutor-citation-research', handleCitationResearch);
     return () => {
-      window.removeEventListener('tutor-citation-research', handleCitationResearch as EventListener);
+      window.removeEventListener('tutor-citation-research', handleCitationResearch);
     };
   }, [setMessages]);
 
@@ -615,20 +616,10 @@ export default function ChatInterface({
 
   return (
     <div ref={containerRef} className="chat-interface-container h-full bg-white flex flex-col overflow-hidden relative">
-      {/* Header - GLUED TO TOP */}
-      <div className="chat-header bg-white border-b p-4 flex-shrink-0">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">AI Tutor Chat</h2>
-            <p className="text-sm text-gray-600">Ask questions about your PDF document</p>
-          </div>
-        </div>
-      </div>
-
       {/* Connect Button */}
-      <div className="chat-connect bg-blue-50 border-b p-4 flex-shrink-0">
+      <div className="chat-connect border-b p-4 flex-shrink-0">
         <div className="flex items-center justify-center gap-4">
-          <button
+          <Button
             onClick={async () => {
               try {
                 if (sessionStatus === 'CONNECTED') {
@@ -687,40 +678,44 @@ export default function ChatInterface({
               }
             }}
             disabled={sessionStatus === 'CONNECTING'}
-            className={`px-6 py-3 rounded-lg font-medium ${
-              sessionStatus === 'CONNECTED'
-                ? 'bg-red-500 text-white hover:bg-red-600'
-                : sessionStatus === 'CONNECTING'
-                ? 'bg-yellow-500 text-white cursor-not-allowed'
-                : 'bg-blue-600 text-white hover:bg-blue-700'
-            }`}
+            variant="default"
+            size="lg"
+            className="rounded-full"
             title={sessionStatus === 'CONNECTED' ? 'Disconnect from AI tutor' : 'Start new chat and connect to AI tutor'}
           >
-            {sessionStatus === 'CONNECTED' ? 'Disconnect' : sessionStatus === 'CONNECTING' ? 'Connecting…' : 'New Chat & Connect'}
-          </button>
+            {sessionStatus === 'CONNECTED' ? (
+              <>
+                <Square />
+                Disconnect
+              </>
+            ) : sessionStatus === 'CONNECTING' ? (
+              'Connecting…'
+            ) : (
+              <>
+                <Play />
+                Connect
+              </>
+            )}
+          </Button>
 
-          {/* Chat History Button */}
-          <button
+          {/* Chat History Icon Button */}
+          <Button
             onClick={() => {
               setShowChatHistory(!showChatHistory);
               if (!showChatHistory) {
                 fetchChatHistory();
               }
             }}
-            className={`px-4 py-3 rounded-lg font-medium ${
-              showChatHistory 
-                ? 'bg-blue-600 text-white' 
-                : 'bg-gray-500 text-white hover:bg-gray-600'
-            }`}
+            variant="default"
+            size="icon"
+            className="rounded-full"
             title="View chat history"
           >
-            {showChatHistory ? 'Hide History' : 'Chat History'}
-          </button>
+            <History />
+          </Button>
         </div>
         
-        <p className="text-center text-sm text-gray-600 mt-2">
-          {sessionStatus === 'CONNECTED' ? '✓ You can now speak with your AI tutor!' : 'Click to start a voice conversation'}
-        </p>
+
       </div>
 
       {/* Main Content Area with Chat History Sidebar */}
@@ -782,14 +777,16 @@ export default function ChatInterface({
                     className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                   >
                     <div
-                      className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                      className={`max-w-[80%] rounded-2xl px-4 py-2 ${
                         message.role === 'user'
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-gray-100 text-gray-900'
+                          ? 'bg-[var(--secondary)] text-white'
+                          : 'bg-gray-100 text-gray-600'
                       }`}
                     >
                       <div className="text-sm">{message.content}</div>
-                      <div className="text-xs mt-1 text-gray-500">
+                      <div className={`text-xs mt-1 ${
+                        message.role === 'user' ? 'text-gray-300' : 'text-gray-500'
+                      }`}>
                         {formatTime(message.timestamp)}
                       </div>
                     </div>
@@ -802,13 +799,15 @@ export default function ChatInterface({
                     const isUser = item.role === "user"
                     return (
                       <div key={item.itemId} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-                        <div className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                        <div className={`max-w-[80%] rounded-2xl px-4 py-2 ${
                           isUser 
-                            ? "bg-indigo-600 text-white" 
-                            : "bg-green-100 text-gray-900"
+                            ? "bg-[var(--secondary)] text-white" 
+                            : "bg-gray-100 text-gray-600"
                         }`}>
                           <div className="text-sm">{item.title}</div>
-                          <div className="text-xs mt-1 text-gray-500">{item.timestamp}</div>
+                          <div className={`text-xs mt-1 ${
+                            isUser ? 'text-gray-300' : 'text-gray-500'
+                          }`}>{item.timestamp}</div>
                         </div>
                       </div>
                     )
@@ -844,28 +843,30 @@ export default function ChatInterface({
         </div>
       </div>
 
-      {/* Input Form - FIXED, CONSTRAINED TO CHAT PANE */}
-      <div className="chat-input fixed bottom-0 bg-gray-50 border-t p-4 z-30" style={fixedInputStyle}>
-        <form onSubmit={handleSubmit} className="flex items-end gap-2">
-          <textarea
-            ref={inputRef}
-            value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask a question about your PDF..."
-            className="flex-1 resize-none rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            rows={1}
-            disabled={isLoading}
-          />
-          <button
-            type="submit"
-            disabled={!inputMessage.trim() || isLoading}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-          >
-            Send
-          </button>
-        </form>
-      </div>
+      {/* Input Form - FIXED, CONSTRAINED TO CHAT PANE - Only show when connected */}
+      {sessionStatus === 'CONNECTED' && (
+        <div className="chat-input fixed bottom-0 bg-gray-50 border-t p-4 z-30" style={fixedInputStyle}>
+          <form onSubmit={handleSubmit} className="flex items-end gap-2">
+            <textarea
+              ref={inputRef}
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask a question about your PDF..."
+              className="flex-1 resize-none rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              rows={1}
+              disabled={isLoading}
+            />
+            <Button
+              type="submit"
+              disabled={!inputMessage.trim() || isLoading}
+              variant="default"
+            >
+              Send
+            </Button>
+          </form>
+        </div>
+      )}
     </div>
   )
 }

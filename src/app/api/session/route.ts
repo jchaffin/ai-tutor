@@ -19,6 +19,7 @@ export async function POST() {
       return NextResponse.json({ error: 'OpenAI API key not configured' }, { status: 500 });
     }
 
+    const model = process.env.OPENAI_REALTIME_MODEL || 'gpt-4o-realtime-preview';
     const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
       method: 'POST',
       headers: {
@@ -26,7 +27,7 @@ export async function POST() {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-4o-realtime-preview-2025-06-03',
+        model,
       }),
     });
 

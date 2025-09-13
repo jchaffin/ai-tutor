@@ -4,7 +4,7 @@ import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
-import Link from 'next/link'
+// import Link from 'next/link'
 import dynamic from 'next/dynamic'
 
 const PDFViewer = dynamic(() => import("@/components/pdf/PDFViewer"), {
@@ -16,6 +16,7 @@ const PDFViewer = dynamic(() => import("@/components/pdf/PDFViewer"), {
 import ChatInterface from '@/components/ChatInterface'
 import { TranscriptProvider } from '@/contexts/TranscriptContext'
 import { EventProvider } from '@/contexts/EventContext'
+import Link from 'next/link'
 
 interface Document {
   id: string
@@ -59,6 +60,13 @@ export default function TutorPage() {
     }
   }, [session, documentId])
 
+  // Expose current document id globally for session-level features
+  useEffect(() => {
+    if (typeof window !== 'undefined' && documentId) {
+      ;(window as any).__currentDocumentId = documentId
+    }
+  }, [documentId])
+
   // Listen for agent tool events
   useEffect(() => {
     const handlePageNavigation = (event: CustomEvent) => {
@@ -93,14 +101,10 @@ export default function TutorPage() {
 
     console.log('🎯 UI: Setting up event listeners')
     window.addEventListener('tutor-page-navigation', handlePageNavigation as EventListener)
-    window.addEventListener('tutor-annotation-created', handleAnnotationCreated as EventListener)
-    window.addEventListener('tutor-annotations-clear', handleClearAnnotations as EventListener)
     console.log('🎯 UI: Event listeners attached')
 
     return () => {
       window.removeEventListener('tutor-page-navigation', handlePageNavigation as EventListener)
-      window.removeEventListener('tutor-annotation-created', handleAnnotationCreated as EventListener)
-      window.removeEventListener('tutor-annotations-clear', handleClearAnnotations as EventListener)
     }
   }, [])
 
@@ -113,50 +117,21 @@ export default function TutorPage() {
         console.log("📄 Document data received:", data);
         setDoc(data)
         
-        // Extract PDF content for the agent
+        // Fetch PDF content for the agent (title is already extracted on upload)
         try {
           const pdfRes = await fetch(`/api/documents/${documentId}/content`)
           if (pdfRes.ok) {
             const { content } = await pdfRes.json()
             console.log("📄 PDF content extracted, length:", content?.length || 0);
-            
-            // Extract the actual title from PDF content
-            let extractedTitle = data.title; // fallback to database title
-            if (content && content.length > 0) {
-              // Look for title patterns in the first few lines of content
-              const lines = content.split('\n').slice(0, 20); // Check first 20 lines
-              for (const line of lines) {
-                const trimmedLine = line.trim();
-                // Look for lines that could be titles (not too long, starts with capital, not empty)
-                if (trimmedLine.length > 3 && 
-                    trimmedLine.length < 200 && 
-                    /^[A-Z]/.test(trimmedLine) && 
-                    !trimmedLine.includes('Abstract') &&
-                    !trimmedLine.includes('Introduction') &&
-                    !trimmedLine.includes('Table of Contents') &&
-                    !trimmedLine.includes('References') &&
-                    !trimmedLine.includes('Bibliography')) {
-                  extractedTitle = trimmedLine;
-                  console.log("📄 Extracted title from PDF content:", extractedTitle);
-                  break;
-                }
-              }
-            }
-            
-            // Update the document title with the extracted title
-            if (data) {
-              setDoc({ ...data, title: extractedTitle });
-            }
             setPdfContent(content)
           } else {
-            // Fallback to basic info
-            const fallbackContent = `Document: ${data.title}\nFilename: ${data.filename}\nThis is a PDF document that the student is viewing.`;
+            const fallbackContent = `Document: ${data.title}\nThis is a PDF document that the student is viewing.`;
             console.log("📄 Using fallback content:", fallbackContent);
             setPdfContent(fallbackContent)
           }
         } catch (error) {
           console.error('Error extracting PDF content:', error)
-          const fallbackContent = `Document: ${data.title}\nFilename: ${data.filename}\nThis is a PDF document that the student is viewing.`;
+          const fallbackContent = `Document: ${data.title}\nThis is a PDF document that the student is viewing.`;
           console.log("📄 Using fallback content due to error:", fallbackContent);
           setPdfContent(fallbackContent)
         }
@@ -258,18 +233,6 @@ export default function TutorPage() {
     console.log('Voice input:', isRecording)
   }
 
-  const navigateToAnnotation = (index: number) => {
-    // This function is no longer needed as annotations are removed
-  }
-
-  const nextAnnotation = () => {
-    // This function is no longer needed as annotations are removed
-  }
-
-  const prevAnnotation = () => {
-    // This function is no longer needed as annotations are removed
-  }
-
   if (status === 'loading' || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -277,7 +240,6 @@ export default function TutorPage() {
       </div>
     )
   }
-
   if (status === 'unauthenticated') {
     return null
   }
@@ -311,28 +273,13 @@ export default function TutorPage() {
       {/* Header */}
       <header className="flex items-center justify-between p-4 bg-white border-b shadow-sm">
         <div className="flex items-center gap-4">
-          <Link
-            href="/dashboard"
-            className="text-indigo-600 hover:text-indigo-700 transition-colors"
-          >
-            ← Dashboard
-          </Link>
           <div>
             <h1 className="text-xl font-semibold text-gray-900">{doc.title}</h1>
-            <p className="text-sm text-gray-600">{doc.filename}</p>
+            <p className="text-sm text-gray-600">{doc.title}</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="text-sm text-gray-600 hidden md:block">
-            Welcome, {session?.user?.name || session?.user?.email}
-          </div>
-          <button
-            onClick={() => router.back()}
-            className="px-4 py-2 bg-gray-500 text-white rounded-lg font-medium hover:bg-gray-600"
-            title="Back"
-          >
-            Back
-          </button>
+        <div className="flex items-center gap-3 relative">
+          <UserMenuInline name={session?.user?.name || session?.user?.email || 'Test User'} documentId={documentId} />
         </div>
       </header>
 
@@ -372,6 +319,31 @@ export default function TutorPage() {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function UserMenuInline({ name, documentId }: { name: string, documentId: string }) {
+  const initials = (name || 'TU').split(' ').map(s => s[0]).slice(0,2).join('').toUpperCase()
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <button className="secondary-btn px-3 py-2 rounded-full flex items-center gap-2 cursor-pointer" onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[var(--brand)] text-white text-xs">{initials}</span>
+        <span className="hidden sm:inline text-slate-700">{name}</span>
+        <span className="text-slate-500">▾</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-2 w-44 rounded-xl border bg-white shadow-md z-50">
+          <Link href="/dashboard" className="block px-3 py-2 hover:bg-slate-50 cursor-pointer">Dashboard</Link>
+          <Link href="/account" className="block px-3 py-2 hover:bg-slate-50 cursor-pointer">Account Settings</Link>
+          <button className="w-full text-left px-3 py-2 hover:bg-slate-50 cursor-pointer" onClick={() => {
+            window.dispatchEvent(new CustomEvent('toggle-chat-history', { detail: true }))
+            setOpen(false)
+          }}>Chat History</button>
+          <Link href="/upload" className="block px-3 py-2 hover:bg-slate-50 cursor-pointer">Upload</Link>
+        </div>
+      )}
     </div>
   )
 }

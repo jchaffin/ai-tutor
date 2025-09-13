@@ -9,7 +9,6 @@ generator client {
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
   relationMode = "prisma"
 }
 
@@ -51,6 +50,7 @@ model User {
   sessions      Session[]
   documents     Document[]
   chatSessions  ChatSession[]
+  authenticators Authenticator[]
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 }
@@ -63,6 +63,23 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
+// For WebAuthn/Passkey support (Auth.js)
+model Authenticator {
+  credentialID         String
+  userId               String
+  providerAccountId    String
+  credentialPublicKey  String
+  counter              Int
+  credentialDeviceType String
+  credentialBackedUp   Boolean
+  transports           String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, credentialID])
+  @@unique([credentialID])
+}
+
 model Document {
   id           String        @id @default(cuid())
   title        String
@@ -73,6 +90,7 @@ model Document {
   userId       String
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   chatSessions ChatSession[]
+  chunks       DocumentChunk[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 }
@@ -111,4 +129,20 @@ model Annotation {
   color     String  @default("#ffff00")
   text      String?
   createdAt DateTime @default(now())
+}
+
+model DocumentChunk {
+  id          String   @id @default(cuid())
+  documentId  String
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  page        Int?
+  idx         Int      // chunk index within document
+  start       Int?     // start char offset in full text
+  end         Int?     // end char offset in full text
+  text        String
+  embedding   Float[]  // stored embedding vector
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([documentId, idx])
 }

@@ -4,6 +4,32 @@ import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { Button } from '@/components/ui/Button'
+
+function UserMenuInline({ name, documentId }: { name: string, documentId: string }) {
+  const initials = (name || 'TU').split(' ').map(s => s[0]).slice(0,2).join('').toUpperCase()
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <button className="secondary-btn px-3 py-2 rounded-full flex items-center gap-2 cursor-pointer" onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}>
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[var(--brand)] text-white text-xs">{initials}</span>
+        <span className="hidden sm:inline text-slate-700">{name}</span>
+        <span className="text-slate-500">▾</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-2 w-44 rounded-xl border bg-white shadow-md z-50">
+          <Link href="/dashboard" className="block px-3 py-2 hover:bg-slate-50 cursor-pointer">Dashboard</Link>
+          <Link href="/account" className="block px-3 py-2 hover:bg-slate-50 cursor-pointer">Account Settings</Link>
+          <button className="w-full text-left px-3 py-2 hover:bg-slate-50 cursor-pointer" onClick={() => {
+            window.dispatchEvent(new CustomEvent('toggle-chat-history', { detail: true }))
+            setOpen(false)
+          }}>Chat History</button>
+          <Link href="/upload" className="block px-3 py-2 hover:bg-slate-50 cursor-pointer">Upload</Link>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function Upload() {
   const { data: session, status } = useSession()
@@ -87,14 +113,9 @@ export default function Upload() {
       <header className="bg-white shadow-sm border-b">
         <div className="container mx-auto px-4 py-4 flex justify-between items-center">
           <Link href="/dashboard" className="text-2xl font-bold text-gray-900">
-            AI <span className="text-indigo-600">Tutor</span>
+            AI <span className="text-[var(--brand)]">Tutor</span>
           </Link>
-          <Link 
-            href="/dashboard"
-            className="text-indigo-600 hover:text-indigo-700 transition-colors"
-          >
-            ← Back to Dashboard
-          </Link>
+          <UserMenuInline name={session?.user?.name || 'User'} documentId="" />
         </div>
       </header>
 
@@ -165,13 +186,15 @@ export default function Upload() {
               </div>
             )}
 
-            <button
+            <Button
               onClick={handleUpload}
               disabled={!file || uploading}
-              className="w-full bg-indigo-600 text-white py-3 px-4 rounded-md font-semibold hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              variant="default"
+              size="lg"
+              className="w-full"
             >
               {uploading ? 'Uploading...' : 'Upload and Start Learning'}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
