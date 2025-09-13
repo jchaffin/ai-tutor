@@ -6,6 +6,7 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 import { randomUUID } from 'crypto'
+import { extractTextFromPDF } from '@/lib/pdfUtils'
 
 export async function POST(request: NextRequest) {
   try {
@@ -48,10 +49,32 @@ export async function POST(request: NextRequest) {
       token: process.env.BLOB_READ_WRITE_TOKEN,
     })
 
-    // Save document metadata to database
+    // After upload, extract title via pdfUtils from the blob URL
+    let extractedTitle: string | undefined
+    try {
+      const extraction = await extractTextFromPDF(blob.url)
+      extractedTitle = extraction.title
+    } catch {}
+
+    // Generate a readable fallback title from the filename if extraction failed
+    const generateTitleFromFilename = (raw: string): string => {
+      const withoutExt = raw.replace(/\.[^.]+$/i, '')
+      const cleaned = withoutExt
+        .replace(/[_-]+/g, ' ') // underscores/dashes to spaces
+        .replace(/\s+/g, ' ') // collapse spaces
+        .trim()
+      // Title-case words up to a reasonable length
+      const words = cleaned.split(' ').slice(0, 16)
+      const titled = words
+        .map((w) => (w.length === 0 ? w : w[0].toUpperCase() + w.slice(1)))
+        .join(' ')
+      return titled.substring(0, 120)
+    }
+
+    // Save document metadata to database (use extracted title if available)
     const document = await prisma.document.create({
       data: {
-        title: file.name.replace('.pdf', ''),
+        title: (extractedTitle && extractedTitle.trim()) || generateTitleFromFilename(file.name),
         filename: file.name,
         filepath: blob.url,
         mimeType: file.type,
@@ -59,7 +82,7 @@ export async function POST(request: NextRequest) {
         userId: session.user.id,
       }
     })
-
+  
     return NextResponse.json({
       message: 'File uploaded successfully',
       documentId: document.id

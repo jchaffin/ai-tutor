@@ -10,6 +10,90 @@ export interface PDFExtractionResult {
   numPages?: number
 }
 
+export function extractTitleCandidates(text: string): string[] {
+  if (!text) return [];
+  const lines = text
+    .split('\n')
+    .slice(0, 40)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const bad = /(submitted to|interspeech|arxiv|preprint|proceedings|workshop|conference|copyright|license|doi|http|www|university|department|school|laboratory|affiliation)/i;
+  const named = /^(abstract|introduction|background|related\s+work|methods?|approach|experiments?|results|discussion|conclusions?|references|appendix|baselines?)\b/i;
+  return lines
+    .filter((l) => l.length >= 8 && l.length <= 160)
+    .filter((l) => /[a-zA-Z]/.test(l))
+    .filter((l) => /^[A-Z]/.test(l))
+    .filter((l) => !bad.test(l))
+    .filter((l) => !named.test(l))
+    .filter((l) => !/[.:]$/.test(l))
+    .filter((l) => l.split(/\s+/).length >= 3)
+    .filter((l) => l !== l.toUpperCase());
+}
+
+export function extractLikelyTitle(text: string): string | undefined {
+  const candidates = extractTitleCandidates(text);
+  return candidates[0];
+}
+
+export function extractAuthorCandidates(text: string, title?: string): string[] {
+  if (!text) return []
+  const lines = text.split('\n').slice(0, 60).map(l => l.trim())
+  // If we know the title, start looking just after it
+  let startIdx = 0
+  if (title) {
+    const idx = lines.findIndex(l => l === title)
+    if (idx >= 0) startIdx = Math.min(idx + 1, lines.length - 1)
+  }
+
+  // Consider a small window after the title
+  const windowLines = lines.slice(startIdx, startIdx + 10)
+  // Join consecutive non-empty lines until a blank appears
+  let block: string[] = []
+  for (const l of windowLines) {
+    if (!l) break
+    // skip venue/footer style lines
+    if (/(submitted to|interspeech|arxiv|preprint|proceedings)/i.test(l)) continue
+    block.push(l)
+    // stop early if we collected enough text
+    if (block.join(' ').length > 200) break
+  }
+  const merged = block.join(' ')
+
+  // Strip emails, affiliations markers, and footnote symbols
+  let cleaned = merged
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, ' ')
+    .replace(/\d+|\*|†|‡|§|¶|‖|‗|\^/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  // Extract sequences of capitalized names separated by commas/and
+  // Example: "Yassir Fathullah, Chunyang Wu, Yuan Sun and Jane O'Connor"
+  const namePattern = /([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,3})/g
+  const rawParts = cleaned.split(/\s+(?:and|&|,|;|\band\b)\s+/i)
+  const candidates: string[] = []
+  for (const part of rawParts) {
+    const m = part.match(namePattern)
+    if (m && m.length) {
+      const candidate = m.join(' ').trim()
+      // Heuristic: at least two words, not all caps, reasonable length
+      const wc = candidate.split(/\s+/).length
+      if (wc >= 2 && wc <= 5 && candidate !== candidate.toUpperCase()) {
+        candidates.push(candidate)
+      }
+    }
+  }
+  // Deduplicate while preserving order
+  const seen = new Set<string>()
+  return candidates.filter(n => (seen.has(n) ? false : (seen.add(n), true)))
+}
+
+export function extractLikelyAuthors(text: string, title?: string): string | undefined {
+  const names = extractAuthorCandidates(text, title)
+  if (names.length === 0) return undefined
+  // Join top few names
+  return names.slice(0, 8).join(', ')
+}
+
 export async function extractTextFromPDF(filePath: string): Promise<PDFExtractionResult> {
   try {
     let dataBuffer: Buffer
@@ -59,29 +143,26 @@ export async function extractTextFromPDF(filePath: string): Promise<PDFExtractio
       keywords: data.info?.Keywords ? data.info.Keywords.split(',').map((k: string) => k.trim()) : undefined,
       numPages: data.numpages || undefined
     }
-    
-    // If no title in metadata, try to extract from first few lines of text
-    if (!result.title && result.text) {
-      const lines = result.text.split('\n').slice(0, 10); // Check first 10 lines
-      for (const line of lines) {
-        const trimmedLine = line.trim();
-        // Look for lines that could be titles (not too long, starts with capital, not empty)
-        if (trimmedLine.length > 3 && 
-            trimmedLine.length < 200 && 
-            /^[A-Z]/.test(trimmedLine) && 
-            !trimmedLine.includes('Abstract') &&
-            !trimmedLine.includes('Introduction') &&
-            !trimmedLine.includes('Table of Contents') &&
-            !trimmedLine.includes('References') &&
-            !trimmedLine.includes('Bibliography') &&
-            !trimmedLine.includes('Chapter') &&
-            !trimmedLine.includes('Section')) {
-          result.title = trimmedLine;
-          break;
-        }
-      }
+
+    // If metadata title is a venue/submission marker, discard it so we can extract a real title from text
+    const badMetaTitle = /(submitted to|interspeech|arxiv|preprint|proceedings|workshop|conference)/i
+    if (result.title && badMetaTitle.test(result.title)) {
+      result.title = undefined
     }
     
+    // If no title in metadata, try to extract from the first few lines of text with stricter heuristics
+    if (!result.title && result.text) {
+      const first = extractTitleCandidates(result.text)[0]
+      if (first) result.title = first
+    }
+
+    // Author extraction: prefer metadata unless it's generic/noisy; otherwise parse from text
+    const badAuthor = /(withheld|anonymous|n\/?a|not available)/i
+    if ((!result.author || badAuthor.test(String(result.author))) && result.text) {
+      const parsedAuthors = extractLikelyAuthors(result.text, result.title)
+      if (parsedAuthors) result.author = parsedAuthors
+    }
+
     console.log("📄 PDF extraction result:", {
       textLength: result.text.length,
       title: result.title,
