@@ -154,6 +154,12 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
 
       // Expose it globally
       (window as any).circleTable = circleTable;
+      (window as any).tutorSetAnnotationPrefs = (prefs: { padding?: number; shape?: 'ellipse' | 'rect' }) => {
+        (window as any).__tutorAnnotationPrefs = {
+          ...(window as any).__tutorAnnotationPrefs,
+          ...prefs,
+        };
+      };
       
       // Also expose a debug function to test OCR on current page
       (window as any).testOCR = async (pageIndex: number = 0, label: string) => {
@@ -313,8 +319,11 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   const pageNavigationPluginInstanceRef = useRef(pageNavigationPlugin());
   const pageNavigationPluginInstance = pageNavigationPluginInstanceRef.current;
  
-  // Utility: draw a circular overlay on a page using pixel rect relative to page layer
-  const drawCircleOnPage = (pageIndex: number, rect: { left: number; top: number; width: number; height: number }) => {
+  // Utility: draw an overlay (ellipse by default; rectangle optional) with outward padding
+  const drawCircleOnPage = (
+    pageIndex: number,
+    rect: { left: number; top: number; width: number; height: number },
+  ) => {
     const layer = document.querySelector(`[data-testid="core__page-layer-${pageIndex}"]`) as HTMLElement | null;
     if (!layer) return;
     let container = layer.querySelector('.tutor-circle-overlay-container') as HTMLElement | null;
@@ -331,14 +340,29 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     }
     const el = document.createElement('div');
     el.className = 'tutor-circle-annotation';
+
+    // Read global overlay preferences if present
+    const prefs = (window as any).__tutorAnnotationPrefs || { padding: 8, shape: 'ellipse' };
+    const padding = Math.max(0, Number(prefs.padding ?? 8));
+    const shape = String(prefs.shape || 'ellipse');
+
+    // Expand outward so border doesn't overlap table text
+    const layerRect = layer.getBoundingClientRect();
+    const padded = {
+      left: Math.max(0, rect.left - padding),
+      top: Math.max(0, rect.top - padding),
+      width: Math.min(layerRect.width, rect.width + padding * 2),
+      height: Math.min(layerRect.height, rect.height + padding * 2),
+    };
+
     Object.assign(el.style, {
       position: 'absolute',
-      left: `${rect.left}px`,
-      top: `${rect.top}px`,
-      width: `${rect.width}px`,
-      height: `${rect.height}px`,
+      left: `${padded.left}px`,
+      top: `${padded.top}px`,
+      width: `${padded.width}px`,
+      height: `${padded.height}px`,
       border: '3px solid #ef4444',
-      borderRadius: '9999px',
+      borderRadius: shape === 'rect' ? '12px' : '9999px',
       boxShadow: '0 0 0 2px rgba(239,68,68,0.25)',
     } as CSSStyleDeclaration);
     container.appendChild(el);
@@ -1418,8 +1442,9 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             return;
           }
           
+          // Always take the first match for deterministic behavior
           const first = results[0];
-          console.log(`🎯 Found label on page ${first.pageIndex + 1}, starting OCR analysis...`);
+          console.log(`🎯 Found label on page ${first.pageIndex + 1}, match ${first.matchIndex}, starting OCR analysis...`);
           
           // Ensure the matched page is rendered before OCR
           try {
@@ -1434,6 +1459,10 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
               try { circleByLabel(label); } catch {}
               return;
             }
+            
+            // Wait for text layer to be fully rendered
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
             try {
               // Use the label highlight bounds as OCR anchor
               const hlEls = layer.querySelectorAll('.rpv-search__highlight');
@@ -1448,9 +1477,11 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                   width: Math.max(1, maxRight - minLeft),
                   height: Math.max(1, maxBottom - minTop),
                 };
+                console.log(`🎯 OCR anchor for ${label}:`, anchor);
               }
 
               const bounds = await ocrDetectTableBoundsFromLayer(layer, anchor);
+              console.log(`🎯 OCR bounds for ${label}:`, bounds);
               if (bounds) {
                 drawCircleOnPage(first.pageIndex, bounds);
                 try { scrollToPageIndex(first.pageIndex); } catch {}
@@ -1458,7 +1489,8 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                 console.log('🎯 OCR returned no bounds; falling back to DOM analysis');
                 try { circleByLabel(label); } catch {}
               }
-            } catch {
+            } catch (error) {
+              console.error('🎯 OCR error:', error);
               try { circleByLabel(label); } catch {}
             }
           })();
