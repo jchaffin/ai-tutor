@@ -40,7 +40,7 @@ You are now a HIGHLY INTERACTIVE tutor that automatically highlights and navigat
 Citation and Highlighting Strategy:
 - FIRST: Use search_document to find relevant content and get context
 - THEN: Begin your spoken response with page references
-- DURING your speech: Use highlight_quote to highlight specific text you're quoting
+- DURING your speech: Use highlight_content_ocr to highlight specific content using OCR detection for better accuracy
 - AS you mention tables/figures: Use circle_table/circle_figure appropriately
 - Always refer to the document explicitly (say the page number)
 - Quote short phrases from the PDF that support your statements
@@ -103,7 +103,7 @@ REMOVED: All automatic annotation instructions. The agent should focus on provid
 SIMPLE WORKFLOW:
 1. Use search_document to find relevant content
 2. Respond with specific page references and quotes
-3. Use highlight_quote to highlight the EXACT text you're citing in your response
+3. Use highlight_content_ocr to highlight content using OCR detection for better visual accuracy
 4. Always reference the PDF content you found
 
 Navigation commands:
@@ -681,6 +681,43 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             reason,
             message: `Navigated to page ${page}${reason ? `: ${reason}` : ''}` 
           };
+        }
+      }),
+
+      tool({
+        name: 'highlight_content_ocr',
+        description: 'Highlight content using OCR-based detection to find visual boundaries around text, sections, or concepts. More accurate than text-based highlighting.',
+        parameters: {
+          type: 'object',
+          properties: {
+            content: {
+              type: 'string',
+              description: 'The text content to highlight using OCR (e.g., "Inter-Head Gating", "Equation 2", "Section 3.2")'
+            },
+            page: {
+              type: 'number',
+              description: 'The page number where this content appears'
+            }
+          },
+          required: ['content'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          const { content, page } = input;
+          if (!content || typeof content !== 'string') {
+            return { success: false, message: 'Missing or invalid content text' };
+          }
+          
+          if (typeof window !== 'undefined') {
+            // Add a small delay to better sync with speech timing
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('tutor-highlight-content-ocr', {
+                detail: { content: content.trim(), page }
+              }));
+            }, 200); // 200ms delay for content highlighting
+            return { success: true, content, message: `Will highlight "${content}" using OCR detection in 200ms` };
+          }
+          return { success: false, content, message: 'Not in browser context' };
         }
       }),
 

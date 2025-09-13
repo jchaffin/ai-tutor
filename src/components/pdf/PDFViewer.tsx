@@ -1370,7 +1370,85 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       }));
     };
 
+    // Precise content highlighting function
+    const highlightContentPrecise = (content: string, page?: number) => {
+      console.log(`🎯 PDF: Precise content highlighting for: "${content}"`);
+      
+      const requestId = `content-highlight-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const onResults = (e: any) => {
+        if (e?.detail?.requestId !== requestId) return;
+        window.removeEventListener('pdf-search-results', onResults as EventListener);
+        const results = (e?.detail?.results || []) as Array<{ pageIndex: number; matchIndex: number }>;
+        if (!results.length) {
+          console.log(`🎯 No search results found for content: ${content}`);
+          return;
+        }
+        
+        // Find the first match and highlight it precisely
+        const first = results[0];
+        setTimeout(async () => {
+          try {
+            const layer = document.querySelector(`[data-testid="core__page-layer-${first.pageIndex}"]`) as HTMLElement | null;
+            if (!layer) return;
+            
+            // Wait for highlights to be rendered
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            // Find the highlight element for this specific match
+            const highlights = layer.querySelectorAll('.rpv-search__highlight');
+            if (highlights.length === 0) return;
+            
+            // Use the first highlight (most relevant match)
+            const highlight = highlights[0] as HTMLElement;
+            const rect = highlight.getBoundingClientRect();
+            const layerRect = layer.getBoundingClientRect();
+            
+            // Calculate precise bounds relative to the page
+            const bounds = {
+              left: rect.left - layerRect.left,
+              top: rect.top - layerRect.top,
+              width: rect.width,
+              height: rect.height
+            };
+            
+            console.log(`🎯 Precise content bounds:`, bounds);
+            
+            // Draw a precise circle around the content
+            drawCircleOnPage(first.pageIndex, bounds);
+            
+            // Scroll to the highlighted content
+            try { scrollToPageIndex(first.pageIndex); } catch {}
+            
+          } catch (error) {
+            console.error('🎯 Precise content highlighting error:', error);
+          }
+        }, 100);
+      };
+      
+      window.addEventListener('pdf-search-results', onResults as EventListener);
+      window.dispatchEvent(new CustomEvent('pdf-search-request', { 
+        detail: { 
+          requestId,
+          keywords: [{ keyword: content, matchCase: false }]
+        } 
+      }));
+    };
+
     // Handle quote highlighting from TutorAgent
+    const handleHighlightContentOCR = (event: any) => {
+      const { content, page } = event.detail || {};
+      console.log('🎯 PDF: Received OCR content highlight request:', { content, page });
+      console.log('🎯 PDF: Full event detail:', event.detail);
+      
+      if (!content || typeof content !== 'string') {
+        console.warn('🎯 PDF: Invalid content text:', content);
+        return;
+      }
+
+      // Use precise content highlighting instead of broad OCR detection
+      highlightContentPrecise(content, page);
+    };
+
     const handleHighlightQuote = (event: any) => {
       const { text, page } = event.detail || {};
       console.log('🎯 PDF: Received highlight quote request:', { text, page });
@@ -1482,12 +1560,26 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
 
               const bounds = await ocrDetectTableBoundsFromLayer(layer, anchor);
               console.log(`🎯 OCR bounds for ${label}:`, bounds);
-              if (bounds) {
+              if (bounds && bounds.width > 0 && bounds.height > 0) {
                 drawCircleOnPage(first.pageIndex, bounds);
                 try { scrollToPageIndex(first.pageIndex); } catch {}
               } else {
-                console.log('🎯 OCR returned no bounds; falling back to DOM analysis');
-                try { circleByLabel(label); } catch {}
+                console.log('🎯 OCR returned invalid bounds; using anchor fallback');
+                if (anchor) {
+                  // Use anchor as fallback with reasonable table dimensions
+                  // Position below the anchor where the table actually is
+                  const fallbackBounds = {
+                    left: anchor.left,
+                    top: anchor.top + anchor.height + 10, // Position below the anchor where table is
+                    width: Math.min(anchor.width * 3, layer.getBoundingClientRect().width - anchor.left - 20),
+                    height: 200
+                  };
+                  drawCircleOnPage(first.pageIndex, fallbackBounds);
+                  try { scrollToPageIndex(first.pageIndex); } catch {}
+                } else {
+                  console.log('🎯 No anchor available; falling back to DOM analysis');
+                  try { circleByLabel(label); } catch {}
+                }
               }
             } catch (error) {
               console.error('🎯 OCR error:', error);
@@ -1523,12 +1615,14 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     window.addEventListener('tutor-circle-figure', handleCircleFigure as EventListener);
     window.addEventListener('tutor-annotations-clear', handleClearAnnotations as EventListener);
     window.addEventListener('tutor-highlight-quote', handleHighlightQuote as EventListener);
+    window.addEventListener('tutor-highlight-content-ocr', handleHighlightContentOCR as EventListener);
     
     return () => {
       window.removeEventListener('tutor-circle-table', handleCircleTable as EventListener);
       window.removeEventListener('tutor-circle-figure', handleCircleFigure as EventListener);
       window.removeEventListener('tutor-annotations-clear', handleClearAnnotations as EventListener);
       window.removeEventListener('tutor-highlight-quote', handleHighlightQuote as EventListener);
+      window.removeEventListener('tutor-highlight-content-ocr', handleHighlightContentOCR as EventListener);
     };
   }, []);
 
