@@ -21,6 +21,51 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
   const threshold = 200;
   const horizontalLines: number[] = [];
   const verticalLines: number[] = [];
+  
+  // Helper: extend bottom boundary downward if dense content continues (treats double lines as separators)
+  const extendBottomByDensity = (left: number, right: number, startBottom: number): number => {
+    const regionLeft = Math.max(0, Math.min(left, width - 1));
+    const regionRight = Math.max(regionLeft + 1, Math.min(right, width - 1));
+    const regionWidth = Math.max(1, regionRight - regionLeft + 1);
+    // Baseline density from the area just above the current bottom
+    let baseSum = 0;
+    let baseRows = 0;
+    for (let y = Math.max(0, startBottom - 12); y <= startBottom && y < height; y++) {
+      let cnt = 0;
+      for (let x = regionLeft; x <= regionRight; x++) {
+        const i = (y * width + x) * 4;
+        const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        if (brightness < threshold) cnt++;
+      }
+      baseSum += cnt / regionWidth;
+      baseRows++;
+    }
+    const baseDensity = baseRows > 0 ? baseSum / baseRows : 0.25;
+    // Dynamic thresholds: keep extending while row density is reasonably close to table's baseline
+    const onThreshold = Math.max(0.08, baseDensity * 0.35);
+    const offThresholdConsecutive = 22; // require sustained whitespace to stop
+
+    let extendedBottom = startBottom;
+    let lowRun = 0;
+    for (let y = startBottom + 1; y < height; y++) {
+      let cnt = 0;
+      for (let x = regionLeft; x <= regionRight; x++) {
+        const i = (y * width + x) * 4;
+        const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        if (brightness < threshold) cnt++;
+      }
+      const ratio = cnt / regionWidth;
+      if (ratio >= onThreshold) {
+        // Treat dense rows (including double borders) as inside-table; continue extending
+        extendedBottom = y;
+        lowRun = 0;
+      } else {
+        lowRun++;
+        if (lowRun >= offThresholdConsecutive) break;
+      }
+    }
+    return extendedBottom;
+  };
 
   // Horizontal lines
   for (let y = 0; y < height; y++) {
@@ -154,7 +199,9 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
 
   rectangles.sort((a, b) => b.area - a.area);
   const best = rectangles[0];
-  return { left: best.left, top: best.top, right: best.right, bottom: best.bottom };
+  // Extend bottom to include sections below separated by double lines
+  const extendedBottom = extendBottomByDensity(best.left, best.right, best.bottom);
+  return { left: best.left, top: best.top, right: best.right, bottom: extendedBottom };
 }
 
 // Render a page layer to canvas and detect table bounds using OCR-ish pixel analysis
@@ -178,7 +225,7 @@ export async function ocrDetectTableBoundsFromLayer(
           // Preserve current left edge; only expand to the right.
           // Vertically, start just BELOW the anchor to avoid circling the caption.
           const padBelow = 8;
-          const padBottom = Math.max(240, Math.round(pageRect.height * 0.55));
+          const padBottom = Math.max(360, Math.round(pageRect.height * 0.65));
           const ax = toCanvasX(anchor.left);
           const ay = toCanvasY(anchor.top);
           const ah = toCanvasY(anchor.top + anchor.height) - ay;
@@ -238,7 +285,7 @@ export async function ocrDetectTableBoundsFromLayer(
     // Preserve current left edge; only expand to the right.
     // Vertically, start just BELOW the anchor to avoid circling the caption.
     const padBelow = 8;
-    const padBottom = Math.max(240, Math.round(pageRect.height * 0.55));
+    const padBottom = Math.max(360, Math.round(pageRect.height * 0.65));
     const ax = toCanvasX2(anchor.left);
     const ay = toCanvasY2(anchor.top);
     const ah = toCanvasY2(anchor.top + anchor.height) - ay;
