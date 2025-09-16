@@ -7,6 +7,9 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 import { randomUUID } from 'crypto'
 import { extractTextFromPDF } from '@/lib/pdfUtils'
+import OpenAI from 'openai'
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 export async function POST(request: NextRequest) {
   try {
@@ -90,6 +93,73 @@ export async function POST(request: NextRequest) {
         userId: session.user.id,
       }
     })
+    
+    // Create embeddings for semantic search (SENTENCE-LEVEL; store exact text for precise highlight)
+    try {
+      const extraction = await extractTextFromPDF(blob.url)
+      const fullText = (extraction.text || '').replace(/\u0000/g, '').trim()
+      if (process.env.OPENAI_API_KEY && fullText.length > 0) {
+        // Basic sentence segmentation (keep punctuation, avoid heavy normalization)
+        const sentences: Array<{ text: string; start: number; end: number }> = []
+        {
+          const re = /[.!?]+[\)\]\"']?\s+|\n{2,}/g
+          let last = 0
+          let m: RegExpExecArray | null
+          while ((m = re.exec(fullText)) !== null) {
+            const end = m.index + m[0].length
+            const raw = fullText.slice(last, end)
+            const trimmed = raw.trim()
+            if (trimmed.length >= 16) {
+              sentences.push({ text: raw, start: last, end })
+            }
+            last = end
+          }
+          const tail = fullText.slice(last)
+          if (tail.trim().length >= 16) sentences.push({ text: tail, start: last, end: fullText.length })
+        }
+
+        // Limit very long sentences by soft-splitting at ~500 chars boundaries
+        const normalized: Array<{ idx: number; text: string; start: number; end: number }> = []
+        let idxCounter = 0
+        for (const s of sentences) {
+          if (s.text.length <= 500) {
+            normalized.push({ idx: idxCounter++, text: s.text.trim(), start: s.start, end: s.end })
+          } else {
+            let c = s.start
+            while (c < s.end) {
+              const e = Math.min(s.end, c + 500)
+              const part = fullText.slice(c, e)
+              normalized.push({ idx: idxCounter++, text: part.trim(), start: c, end: e })
+              c = e
+            }
+          }
+        }
+
+        // Generate embeddings in small batches to stay under token limits
+        for (const ch of normalized) {
+          const emb = await openai.embeddings.create({
+            model: 'text-embedding-3-small',
+            input: ch.text
+          })
+          const embedding = emb.data[0].embedding
+          await prisma.documentChunk.create({
+            data: {
+              documentId: document.id,
+              idx: ch.idx,
+              text: ch.text,
+              start: ch.start,
+              end: ch.end,
+              embedding
+            }
+          })
+        }
+        console.log(`🧠 Embedded ${normalized.length} sentence chunks for document ${document.id}`)
+      } else {
+        console.warn('Skipping embeddings: no API key or empty text')
+      }
+    } catch (err) {
+      console.error('❌ Failed to embed document:', err)
+    }
   
     return NextResponse.json({
       message: 'File uploaded successfully',

@@ -63,7 +63,7 @@ You are now a HIGHLY INTERACTIVE tutor that automatically highlights and navigat
    - When you quote text in "quotes" → automatically highlights that text
    - You can still manually call tools, but speech detection provides automatic highlighting
 
-6. **SECTION DETECTION**: For section-related questions, use highlight_section_content to find and highlight entire sections, but time it with your speech flow.
+6. **SECTION DETECTION**: For section-related questions, use highlight_section to highlight the section title text (no circles), timed with your speech flow.
 
 7. **MANDATORY SEMANTIC SEARCH**: You MUST use semantic_search tool during your speech to find conceptually related content. This is REQUIRED, not optional:
    - When explaining concepts → call semantic_search("concept name")
@@ -75,7 +75,7 @@ Citation and Highlighting Strategy:
 - FIRST: Use search_document to find exact keyword matches from the user's query
 - THEN: Begin your spoken response with page references
 - DURING your speech: Use semantic_search to find conceptually similar content as you explain concepts (MANDATORY)
-- DURING your speech: Use highlight_section_ocr to highlight section regions using OCR detection for better accuracy
+- DURING your speech: Use highlight_section to highlight section title text (no circles)
 - AS you mention tables/figures: Use circle_table/circle_figure appropriately
 - Always refer to the document explicitly (say the page number)
 - Quote short phrases from the PDF that support your statements
@@ -278,30 +278,7 @@ Remember: You're having a voice conversation, so keep responses natural and spok
             // Prioritize the original query first (longer phrases highlight better)
             variants.add(base);
             
-            // Use semantic search with embeddings for better matching
-            try {
-              const semanticResults = await performSemanticSearch(query, documentId);
-              if (semanticResults && semanticResults.length > 0) {
-                // Instead of adding keywords, dispatch semantic highlight events for specific fragments
-                semanticResults.forEach(result => {
-                  if (result.text && result.text.length > 10) {
-                    // Dispatch event to highlight this specific semantically similar fragment
-                    if (typeof window !== 'undefined') {
-                      window.dispatchEvent(new CustomEvent('tutor-highlight-semantic-fragment', {
-                        detail: {
-                          text: result.text,
-                          page: result.page,
-                          similarity: result.similarity,
-                          query: query
-                        }
-                      }));
-                    }
-                  }
-                });
-              }
-            } catch (error) {
-              console.log("🔍 Semantic search failed, falling back to keyword search:", error);
-            }
+            // IMPORTANT: For user submit, keep to lexical highlighting only. No semantic fragments here.
             
             // Only add variations if the original is short (to avoid over-fragmentation)
             if (base.length <= 15) {
@@ -531,10 +508,36 @@ Remember: You're having a voice conversation, so keep responses natural and spok
           return { success: false, sections: [] };
         }
       }),
-      // navigate to section
+      // highlight section (title only, no OCR circles)
+      tool({
+        name: 'highlight_section',
+        description: 'Highlight a section by searching for its title text (no circles). This highlights the section title content using the PDF search highlighter.',
+        parameters: {
+          type: 'object',
+          properties: { title: { type: 'string', description: 'Section title to highlight' } },
+          required: ['title'],
+          additionalProperties: false
+        },
+        execute: async (input: any) => {
+          const title = String(input?.title || '').trim();
+          if (!title) return { success: false, message: 'Missing section title' };
+          if (typeof window === 'undefined') return { success: false, message: 'Not in browser context' };
+          // Dispatch a search request to highlight the title text. We intentionally do NOT draw circles.
+          const requestId = `section-highlight-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          window.dispatchEvent(new CustomEvent('pdf-search-request', {
+            detail: { requestId, keywords: [{ keyword: title, matchCase: false }] }
+          }));
+          // Also set the active section range so semantic search is constrained to this section
+          try {
+            window.dispatchEvent(new CustomEvent('pdf-set-active-section', { detail: { title } }));
+          } catch {}
+          return { success: true, title, message: `Highlighted section title: ${title}` };
+        }
+      }),
+      // navigate to section (no circles; highlights title only)
       tool({
         name: 'navigate_to_section',
-        description: 'Navigate to a section by number (e.g., 5.1) or title (e.g., Baselines). Also highlights the section title.',
+        description: 'Navigate to a section by number or title and highlight the section title (no circles).',
         parameters: {
           type: 'object',
           properties: { query: { type: 'string', description: 'Section number or title' } },
@@ -548,24 +551,28 @@ Remember: You're having a voice conversation, so keep responses natural and spok
           const outline: Array<{ title: string; pageIndex: number }> = (window as any).__pdfOutline || [];
           const q = qRaw.toLowerCase();
           const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
-          const numLike = q.match(/^\d+(?:\.\d+)*$/);
+          const numLike = q.match(/\d+(?:\.\d+)*/);
           let match = null as any;
           if (numLike) {
-            match = outline.find((s) => normalize(s.title).startsWith(q));
+            const num = numLike[0];
+            match = outline.find((s) => normalize(s.title).startsWith(num));
           }
           if (!match) {
-            match = outline.find((s) => normalize(s.title).includes(q) || q.includes(normalize(s.title)));
+            // Prefer titles that start with the query, else includes
+            match = outline.find((s) => normalize(s.title).startsWith(q)) || outline.find((s) => normalize(s.title).includes(q) || q.includes(normalize(s.title)));
           }
           if (match) {
             try { (window as any).pdfJumpToPage ? (window as any).pdfJumpToPage(match.pageIndex + 1) : window.dispatchEvent(new CustomEvent('pdf-navigate-page', { detail: { pageNumber: match.pageIndex } })); } catch {}
             const requestId = `section-nav-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             window.dispatchEvent(new CustomEvent('pdf-search-request', { detail: { requestId, keywords: [{ keyword: match.title, matchCase: false }] } }));
+            // Activate this section for subsequent semantic filtering
+            try { window.dispatchEvent(new CustomEvent('pdf-set-active-section', { detail: { title: match.title } })); } catch {}
             return { success: true, page: match.pageIndex + 1, section: match.title };
           }
-          // fallback: search for the query text directly
+          // fallback: highlight the query text directly
           const requestId = `section-fallback-${Date.now()}-${Math.random().toString(36).slice(2)}`;
           window.dispatchEvent(new CustomEvent('pdf-search-request', { detail: { requestId, keywords: [{ keyword: qRaw, matchCase: false }] } }));
-          return { success: false, message: 'Section not found in outline; highlighted search results instead.' };
+          return { success: false, message: 'Section not found in outline; highlighted query text instead.' };
         }
       }),      
       // highlight quote

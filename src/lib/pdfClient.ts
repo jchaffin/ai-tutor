@@ -18,11 +18,9 @@ export interface TableBox {
 // Detect table-like rectangular boundaries by scanning pixel data for long dark lines
 export function detectTableBoundaries(imageData: ImageData, width: number, height: number): TableBox | null {
   const data = imageData.data;
-  const threshold = 150; // Even lower threshold to detect lighter lines and text
+  const threshold = 200;
   const horizontalLines: number[] = [];
   const verticalLines: number[] = [];
-  
-  console.log(`🎯 detectTableBoundaries called with width=${width}, height=${height}, threshold=${threshold}`);
   
   // Helper: extend bottom boundary downward if dense content continues (treats double lines as separators)
   const extendBottomByDensity = (left: number, right: number, startBottom: number): number => {
@@ -83,7 +81,7 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
         consecutiveDark = 0;
       }
     }
-    if (maxConsecutive > width * 0.15) horizontalLines.push(y); // Even lower threshold for horizontal lines
+    if (maxConsecutive > width * 0.3) horizontalLines.push(y);
   }
 
   // Vertical lines
@@ -100,17 +98,12 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
         consecutiveDark = 0;
       }
     }
-    if (maxConsecutive > height * 0.1) verticalLines.push(x); // Even lower threshold for vertical lines
+    if (maxConsecutive > height * 0.3) verticalLines.push(x);
   }
 
-  console.log(`🎯 Line detection: found ${horizontalLines.length} horizontal lines, ${verticalLines.length} vertical lines`);
-  console.log(`🎯 Horizontal lines: [${horizontalLines.slice(0, 10).join(', ')}${horizontalLines.length > 10 ? '...' : ''}]`);
-  console.log(`🎯 Vertical lines: [${verticalLines.slice(0, 10).join(', ')}${verticalLines.length > 10 ? '...' : ''}]`);
-  
   // If we found at least two vertical and two horizontal guide lines, build rectangles from them
   const rectangles: Array<TableBox & { area: number }> = [];
   if (horizontalLines.length >= 2 && verticalLines.length >= 2) {
-    console.log(`🎯 Building rectangles from ${horizontalLines.length} horizontal and ${verticalLines.length} vertical lines`);
     for (let i = 0; i < horizontalLines.length - 1; i++) {
       for (let j = i + 1; j < horizontalLines.length; j++) {
         for (let k = 0; k < verticalLines.length - 1; k++) {
@@ -127,7 +120,6 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
 
   // Fallback when vertical lines are missing: infer columns by vertical dark pixel density
   if (rectangles.length === 0) {
-    console.log(`🎯 No rectangles found, trying density-based detection`);
     // Compute vertical density of dark pixels
     const colDensity = new Array<number>(width).fill(0);
     for (let x = 0; x < width; x++) {
@@ -151,7 +143,7 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
       return out;
     };
     const smoothCols = smooth(colDensity, 9);
-    const colThreshold = height * 0.05; // Even lower threshold to catch more content
+    const colThreshold = height * 0.08; // Lower threshold to catch more content
     const colRegions: Array<{ start: number; end: number; density: number }> = [];
     let runStart: number | null = null;
     for (let x = 0; x < width; x++) {
@@ -180,7 +172,7 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
       rowDensity[y] = count;
     }
     const smoothRows = smooth(rowDensity, 9);
-    const rowThreshold = width * 0.05; // Even lower threshold
+    const rowThreshold = width * 0.08; // Lower threshold
     let top = 0, bottom = height - 1;
     if (horizontalLines.length >= 2) {
       top = Math.min(...horizontalLines);
@@ -193,17 +185,12 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
       if (!foundTop) return null;
     }
 
-    console.log(`🎯 Found ${colRegions.length} column regions:`, colRegions.map(r => `start:${r.start}, end:${r.end}, density:${r.density}`));
     if (colRegions.length > 0) {
       const left = colRegions[0].start;
       const right = colRegions[colRegions.length - 1].end;
       const area = (bottom - top) * (right - left);
-      console.log(`🎯 Checking area: ${area} vs threshold ${width * height * 0.01}, width: ${right - left} vs threshold ${Math.max(15, Math.floor(width * 0.06))}`);
       if (area > width * height * 0.01 && right - left > Math.max(15, Math.floor(width * 0.06))) { // Lower thresholds
-        console.log(`🎯 Returning density-based bounds: {left: ${left}, top: ${top}, right: ${right}, bottom: ${bottom}}`);
         return { left, top, right, bottom };
-      } else {
-        console.log(`🎯 Density-based detection failed area/width checks`);
       }
     }
     // Could not infer a confident rectangle
@@ -214,15 +201,7 @@ export function detectTableBoundaries(imageData: ImageData, width: number, heigh
   const best = rectangles[0];
   // Extend bottom to include sections below separated by double lines
   const extendedBottom = extendBottomByDensity(best.left, best.right, best.bottom);
-  const result = { left: best.left, top: best.top, right: best.right, bottom: extendedBottom };
-  
-  // Ensure we never return invalid dimensions
-  if (result.right <= result.left || extendedBottom <= result.top) {
-    console.log('🎯 OCR: Invalid dimensions detected, using fallback bounds');
-    return null;
-  }
-  
-  return result;
+  return { left: best.left, top: best.top, right: best.right, bottom: extendedBottom };
 }
 
 // Render a page layer to canvas and detect table bounds using OCR-ish pixel analysis
@@ -242,10 +221,11 @@ export async function ocrDetectTableBoundsFromLayer(
 
         // Define region of interest (below/around the label) if anchor provided
         let roiX = 0, roiY = 0, roiW = pdfCanvas.width, roiH = pdfCanvas.height;
+        // Track column limits in layer coordinates for later clamping
+        let columnStartLayer = 0;
+        let columnEndLayer = pageRect.width;
         if (anchor) {
-          // Preserve current left edge; only expand to the right within the SAME column.
-          // Vertically, start ABOVE the anchor to capture tables that might be above the label.
-          const padAbove = 60; // Move up to capture table above label
+          // Vertically, start just BELOW the anchor to avoid circling the caption.
           const padBelow = 8;
           const padBottom = Math.max(360, Math.round(pageRect.height * 0.65));
 
@@ -258,72 +238,55 @@ export async function ocrDetectTableBoundsFromLayer(
             const gap = positions[i] - positions[i - 1];
             if (gap > maxGap && gap > 30) { maxGap = gap; columnBoundary = positions[i - 1] + gap / 2; }
           }
-          // Strict column enforcement: if no clear gap, use page halves
+          // Column limits in layer coordinates
           const isLeftColumn = anchor.left < pageRect.width / 2;
-          const columnEnd = maxGap > 30 ? (isLeftColumn ? columnBoundary : pageRect.width) : (isLeftColumn ? pageRect.width / 2 : pageRect.width);
-          
-          const ax = toCanvasX(anchor.left);
+          if (maxGap > 30) {
+            columnStartLayer = isLeftColumn ? 0 : columnBoundary;
+            columnEndLayer = isLeftColumn ? columnBoundary : pageRect.width;
+          } else {
+            columnStartLayer = isLeftColumn ? 0 : pageRect.width / 2;
+            columnEndLayer = isLeftColumn ? pageRect.width / 2 : pageRect.width;
+          }
+
+          // For right column tables, be more conservative with the ROI width when the gap is unclear
           const ay = toCanvasY(anchor.top);
           const ah = toCanvasY(anchor.top + anchor.height) - ay;
-          roiX = Math.max(0, ax);
-          
-          // Calculate ROI width more robustly
-          const colEndCanvas = toCanvasX(Math.min(pageRect.width, columnEnd + 12)); // small margin into gutter
-          const availableWidth = pdfCanvas.width - roiX;
-          const columnWidth = colEndCanvas - roiX;
-          
-          // Use the more conservative of available width or column width, but ensure minimum viable width
-          roiW = Math.max(100, Math.min(availableWidth, columnWidth > 0 ? columnWidth : availableWidth));
-          // For top-left tables, search from much higher to capture the full table
-          roiY = Math.max(0, ay - toCanvasY(100)); // Start 100px above the anchor to capture full table
-          roiH = pdfCanvas.height - roiY; // Scan until the bottom of the page to find all horizontal lines
-          console.log(`🎯 ROI Y calculation: ay=${ay}, roiY=${roiY}, roiH=${roiH}`);
-          
-          // Debug logging for ROI calculation
-          console.log(`🎯 ROI calculation: anchor=${JSON.stringify(anchor)}, roiX=${roiX}, roiY=${roiY}, roiW=${roiW}, roiH=${roiH}, availableWidth=${availableWidth}, columnWidth=${columnWidth}`);
+          const colStartCanvas = toCanvasX(Math.max(0, columnStartLayer - 6)); // small leftward margin inside the column
+          const colEndCanvas = toCanvasX(Math.min(pageRect.width, columnEndLayer + 12)); // small margin into gutter
+          roiX = colStartCanvas;
+          roiW = Math.max(20, Math.min(pdfCanvas.width - roiX, colEndCanvas - roiX));
+          if (!isLeftColumn && maxGap <= 30) {
+            const conservativeWidth = Math.min(colEndCanvas - roiX, Math.round(pageRect.width * 0.4));
+            roiW = Math.max(20, conservativeWidth);
+          }
+          roiY = Math.max(0, ay + ah + padBelow);
+          roiH = Math.min(pdfCanvas.height - roiY, padBottom);
         }
 
         const imageData = ctx.getImageData(roiX, roiY, roiW, roiH);
         const tableBox = detectTableBoundaries(imageData, roiW, roiH);
-        console.log(`🎯 Table detection result: ${tableBox ? JSON.stringify(tableBox) : 'null'}`);
-        if (tableBox && tableBox.right > tableBox.left && tableBox.bottom > tableBox.top) {
+        if (tableBox) {
           const scaleX = pageRect.width / pdfCanvas.width;
           const scaleY = pageRect.height / pdfCanvas.height;
           let left = (roiX + tableBox.left) * scaleX;
           let top = (roiY + tableBox.top) * scaleY;
           let right = (roiX + tableBox.right) * scaleX;
-          let bottom = (roiY + tableBox.bottom) * scaleY;
+          const bottom = (roiY + tableBox.bottom) * scaleY;
           if (anchor) {
-            // Lock left edge to current column start; let OCR decide top/bottom.
-            left = anchor.left;
-            // Let OCR determine the full table boundaries from top to bottom
-            // Don't constrain top - let it detect the complete table
-            // Cap right to the current column end
-            const textEls = Array.from(layerEl.querySelectorAll('span, div')).filter((el) => (el.textContent || '').trim().length > 0);
-            const positions = textEls.map((el) => (el.getBoundingClientRect().left - pageRect.left)).sort((a, b) => a - b);
-            let columnBoundary = pageRect.width / 2;
-            let maxGap = 0;
-            for (let i = 1; i < positions.length; i++) { const gap = positions[i] - positions[i - 1]; if (gap > maxGap && gap > 30) { maxGap = gap; columnBoundary = positions[i - 1] + gap / 2; } }
-            const isLeftColumn = anchor.left < pageRect.width / 2;
-            const columnEnd = maxGap > 30 ? (isLeftColumn ? columnBoundary : pageRect.width) : (isLeftColumn ? pageRect.width / 2 : pageRect.width);
-            // Trust OCR result more - only constrain if it's clearly outside reasonable bounds
-            const originalRight = right;
-            const anchorRight = anchor.left + anchor.width;
-            const reasonableMaxRight = Math.min(pageRect.width - 20, Math.max(columnEnd + 5, originalRight * 0.8)); // More generous right boundary
-            right = Math.min(reasonableMaxRight, Math.max(right, anchorRight));
-            console.log(`🎯 Right calculation: originalRight=${originalRight}, anchorRight=${anchorRight}, columnEnd=${columnEnd}, reasonableMaxRight=${reasonableMaxRight}, finalRight=${right}`);
+            // Use OCR-detected left edge but never outside the current column
+            const minTop = anchor.top + anchor.height + 6;
+            top = Math.max(top, minTop);
+            const columnStartHere = columnStartLayer;
+            const columnEndHere = columnEndLayer;
+            left = Math.max(columnStartHere, left - 6); // small expansion to include border
+            right = Math.min(columnEndHere - 2, Math.max(right, (anchor.left + anchor.width)));
           }
-          // Trim bottom boundary to avoid including text below the table
-          const trimmedBottom = Math.min(bottom, top + (bottom - top) * 0.95); // Trim 5% from bottom to capture full table
-          
-          const finalBounds = {
+          return {
             left,
             top,
             width: Math.max(0, right - left),
-            height: Math.max(0, trimmedBottom - top),
+            height: Math.max(0, bottom - top),
           };
-          console.log(`🎯 Final bounds calculation: left=${left}, top=${top}, right=${right}, bottom=${bottom}, width=${finalBounds.width}, height=${finalBounds.height}`);
-          return finalBounds;
         }
       }
     } catch {}
@@ -348,10 +311,11 @@ export async function ocrDetectTableBoundsFromLayer(
   const toCanvasX2 = (x: number) => Math.max(0, Math.min(tempCanvas.width, Math.round((x / pageRect.width) * tempCanvas.width)));
   const toCanvasY2 = (y: number) => Math.max(0, Math.min(tempCanvas.height, Math.round((y / pageRect.height) * tempCanvas.height)));
   let roiX2 = 0, roiY2 = 0, roiW2 = tempCanvas.width, roiH2 = tempCanvas.height;
+  // Track column limits in layer coordinates for later clamping
+  let columnStartLayer2 = 0;
+  let columnEndLayer2 = pageRect.width;
   if (anchor) {
-    // Preserve current left edge; only expand to the right within the SAME column.
-    // Vertically, start ABOVE the anchor to capture tables that might be above the label.
-    const padAbove = 60; // Move up to capture table above label
+    // Vertically, start just BELOW the anchor to avoid circling the caption.
     const padBelow = 8;
     const padBottom = Math.max(360, Math.round(pageRect.height * 0.65));
 
@@ -365,51 +329,44 @@ export async function ocrDetectTableBoundsFromLayer(
       if (gap > maxGap && gap > 30) { maxGap = gap; columnBoundary = positions[i - 1] + gap / 2; }
     }
     const isLeftColumn = anchor.left < pageRect.width / 2;
-    const columnEnd = maxGap > 30 ? (isLeftColumn ? columnBoundary : pageRect.width) : (isLeftColumn ? pageRect.width / 2 : pageRect.width);
-    
-    const ax = toCanvasX2(anchor.left);
+    if (maxGap > 30) {
+      columnStartLayer2 = isLeftColumn ? 0 : columnBoundary;
+      columnEndLayer2 = isLeftColumn ? columnBoundary : pageRect.width;
+    } else {
+      columnStartLayer2 = isLeftColumn ? 0 : pageRect.width / 2;
+      columnEndLayer2 = isLeftColumn ? pageRect.width / 2 : pageRect.width;
+    }
+
     const ay = toCanvasY2(anchor.top);
     const ah = toCanvasY2(anchor.top + anchor.height) - ay;
-    roiX2 = Math.max(0, ax);
-    
-    // Calculate ROI width more robustly (same fix as main path)
-    const colEndCanvas2 = toCanvasX2(Math.min(pageRect.width, columnEnd + 12));
-    const availableWidth2 = tempCanvas.width - roiX2;
-    const columnWidth2 = colEndCanvas2 - roiX2;
-    
-    // Use the more conservative of available width or column width, but ensure minimum viable width
-    roiW2 = Math.max(100, Math.min(availableWidth2, columnWidth2 > 0 ? columnWidth2 : availableWidth2));
-    roiY2 = Math.max(0, ay + ah + padBelow); // Start below the anchor where the table is
+    const colStartCanvas2 = toCanvasX2(Math.max(0, columnStartLayer2 - 6));
+    const colEndCanvas2 = toCanvasX2(Math.min(pageRect.width, columnEndLayer2 + 12));
+    roiX2 = colStartCanvas2;
+    roiW2 = Math.max(20, Math.min(tempCanvas.width - roiX2, colEndCanvas2 - roiX2));
+    if (!isLeftColumn && maxGap <= 30) {
+      const conservativeWidth = Math.min(colEndCanvas2 - roiX2, Math.round(pageRect.width * 0.4));
+      roiW2 = Math.max(20, conservativeWidth);
+    }
+    roiY2 = Math.max(0, ay + ah + padBelow);
     roiH2 = Math.min(tempCanvas.height - roiY2, padBottom);
-    
-    // Debug logging for fallback ROI calculation
-    console.log(`🎯 Fallback ROI calculation: anchor=${JSON.stringify(anchor)}, roiX2=${roiX2}, roiY2=${roiY2}, roiW2=${roiW2}, roiH2=${roiH2}, availableWidth2=${availableWidth2}, columnWidth2=${columnWidth2}`);
   }
 
   const imageData = tempCtx.getImageData(roiX2, roiY2, roiW2, roiH2);
   const tableBox = detectTableBoundaries(imageData, roiW2, roiH2);
-  console.log(`🎯 Fallback table detection result: ${tableBox ? JSON.stringify(tableBox) : 'null'}`);
-  if (!tableBox || tableBox.right <= tableBox.left || tableBox.bottom <= tableBox.top) return null;
+  if (!tableBox) return null;
 
   const scaleX = pageRect.width / tempCanvas.width;
   const scaleY = pageRect.height / tempCanvas.height;
   let left = (roiX2 + tableBox.left) * scaleX;
   let top = (roiY2 + tableBox.top) * scaleY;
   let right = (roiX2 + tableBox.right) * scaleX;
-  let bottom = (roiY2 + tableBox.bottom) * scaleY;
+  const bottom = (roiY2 + tableBox.bottom) * scaleY;
   if (anchor) {
     const minTop = anchor.top + anchor.height + 6;
-    left = anchor.left; // keep left fixed
-    top = Math.max(top, minTop); // ensure we don't select caption area
-    // Cap right to the current column end
-    const textEls = Array.from(layerEl.querySelectorAll('span, div')).filter((el) => (el.textContent || '').trim().length > 0);
-    const positions = textEls.map((el) => (el.getBoundingClientRect().left - pageRect.left)).sort((a, b) => a - b);
-    let columnBoundary = pageRect.width / 2;
-    let maxGap = 0;
-    for (let i = 1; i < positions.length; i++) { const gap = positions[i] - positions[i - 1]; if (gap > maxGap && gap > 30) { maxGap = gap; columnBoundary = positions[i - 1] + gap / 2; } }
-    const isLeftColumn = anchor.left < pageRect.width / 2;
-    const columnEnd = maxGap > 30 ? (isLeftColumn ? columnBoundary : pageRect.width) : (isLeftColumn ? pageRect.width / 2 : pageRect.width);
-    right = Math.min(columnEnd - 6, Math.max(right, anchor.left + anchor.width));
+    top = Math.max(top, minTop);
+    // Clamp to column limits derived earlier
+    left = Math.max(columnStartLayer2, left - 6);
+    right = Math.min(columnEndLayer2 - 6, Math.max(right, anchor.left + anchor.width));
   }
   return {
     left,

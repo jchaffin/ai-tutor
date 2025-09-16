@@ -318,6 +318,107 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   const searchPluginInstance = searchPluginInstanceRef.current;
   const pageNavigationPluginInstanceRef = useRef(pageNavigationPlugin());
   const pageNavigationPluginInstance = pageNavigationPluginInstanceRef.current;
+
+  // Lightweight in-view search overlay that leverages the search plugin
+  const [showSearchOverlay, setShowSearchOverlay] = useState(false);
+  const [searchValue, setSearchValue] = useState("");
+  const [matchInfo, setMatchInfo] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  const openSearchOverlay = () => {
+    setShowSearchOverlay(true);
+    // Defer focus to next tick to ensure input exists
+    setTimeout(() => searchInputRef.current?.focus(), 0);
+  };
+
+  const closeSearchOverlay = () => {
+    setShowSearchOverlay(false);
+    setSearchValue("");
+    setMatchInfo({ current: 0, total: 0 });
+    try { searchPluginInstanceRef.current?.clearHighlights(); } catch {}
+  };
+
+  // Intercept Cmd/Ctrl+F and route to in-view search that can match across lines
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      const isMac = navigator.platform.toLowerCase().includes('mac');
+      const cmdOrCtrl = isMac ? ev.metaKey : ev.ctrlKey;
+      if (cmdOrCtrl && (ev.key === 'f' || ev.key === 'F')) {
+        ev.preventDefault();
+        openSearchOverlay();
+      } else if (ev.key === 'Escape' && showSearchOverlay) {
+        ev.preventDefault();
+        closeSearchOverlay();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showSearchOverlay]);
+
+  const normalizedPhrase = (s: string) =>
+    String(s || "")
+      .normalize('NFKC')
+      // Normalize quotes and dashes
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u2010-\u2015]/g, '-')
+      // Remove soft hyphen and zero-width chars
+      .replace(/[\u00ad\u200b-\u200f\ufeff]/g, '')
+      // Collapse any whitespace
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // Build a forgiving regex that tolerates whitespace, hyphenation, and soft hyphen differences
+  const buildFlexibleRegexFromPhrase = (phrase: string): RegExp => {
+    const escaped = escapeRegExp(phrase);
+    // Tolerate any whitespace (including NBSP/soft hyphen) spans
+    let pattern = escaped
+      .replace(/\s+/g, '(?:[\\s\\u00a0\\u00ad]+)')
+      // Treat hyphen-like chars as optional, with optional following whitespace
+      .replace(/-/g, '(?:[-\\u2010-\\u2015]?[\\s\\u00a0\\u00ad]*)');
+    // Also allow stray soft hyphens anywhere to be ignored
+    pattern = pattern.replace(/\B/g, '(?:\\u00ad)?');
+    return new RegExp(pattern, 'i');
+  };
+
+  const runSearch = async (value: string) => {
+    const phrase = normalizedPhrase(value);
+    if (!phrase) {
+      try { searchPluginInstanceRef.current?.clearHighlights(); } catch {}
+      setMatchInfo({ current: 0, total: 0 });
+      return;
+    }
+    try {
+      // Attempt 1: direct phrase
+      let matches = await searchPluginInstanceRef.current.highlight([{ keyword: phrase, matchCase: false }]);
+      if (matches.length === 0) {
+        // Attempt 2: flexible regex that tolerates whitespace/hyphenation/soft hyphens
+        const regex = buildFlexibleRegexFromPhrase(phrase);
+        matches = await searchPluginInstanceRef.current.highlight(regex as any);
+      }
+      setMatchInfo({ current: matches.length ? 1 : 0, total: matches.length });
+      if (matches.length > 0) {
+        searchPluginInstanceRef.current.jumpToMatch(0);
+      }
+    } catch {
+      setMatchInfo({ current: 0, total: 0 });
+    }
+  };
+
+  const jumpToNext = () => {
+    try {
+      const m = searchPluginInstanceRef.current.jumpToNextMatch();
+      if (m) setMatchInfo((info) => ({ ...info, current: Math.min(info.total, info.current + 1) }));
+    } catch {}
+  };
+  const jumpToPrev = () => {
+    try {
+      const m = searchPluginInstanceRef.current.jumpToPreviousMatch();
+      if (m) setMatchInfo((info) => ({ ...info, current: Math.max(1, info.current - 1) }));
+    } catch {}
+  };
  
   // Utility: draw an overlay (ellipse by default; rectangle optional) with outward padding
   const drawCircleOnPage = (
@@ -481,7 +582,11 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
 
   // Utility: find a text occurrence inside an element and return its DOMRange and page-relative rect
   const normalizeSpaces = (s: string) => s.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
-  const findTextRectInElement = (root: HTMLElement, term: string): { rect: DOMRect; range: Range } | null => {
+  const findTextRectInElement = (
+    root: HTMLElement,
+    term: string,
+    clip?: { left: number; top: number; right: number; bottom: number }
+  ): { rect: DOMRect; range: Range } | null => {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const lowerTerm = normalizeSpaces(term.toLowerCase());
     let node: Node | null = walker.nextNode();
@@ -524,6 +629,19 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             range.setStart(node, Math.max(0, start));
             range.setEnd(node, Math.min((node.nodeValue || '').length, end));
             const rect = range.getBoundingClientRect();
+            // If a clip is provided, ensure this match lies within the active section bounds
+            if (clip) {
+              const layerRect = root.getBoundingClientRect();
+              const pageLeft = rect.left - layerRect.left;
+              const pageTop = rect.top - layerRect.top;
+              const pageRight = pageLeft + rect.width;
+              const pageBottom = pageTop + rect.height;
+              const intersects = !(pageRight < clip.left || pageLeft > clip.right || pageBottom < clip.top || pageTop > clip.bottom);
+              if (!intersects) {
+                node = walker.nextNode();
+                continue;
+              }
+            }
             return { rect, range };
           } catch {}
         }
@@ -533,12 +651,293 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     return null;
   };
 
+  // Robust query normalization and n-gram keyword builder for cross-line tolerant search
+  const normalizeQuery = (s: string): string => {
+    try {
+      return s
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/[\u201C\u201D]/g, '"')
+        .normalize('NFKD').replace(/[\u0300-\u036f]/g, '') // strip diacritics
+        .replace(/[\u00AD]/g, '') // soft hyphen
+        .replace(/-\s+/g, '-') // hyphen+newline -> hyphen
+        .replace(/\s+/g, ' ')
+        .trim();
+    } catch { return s; }
+  };
+
+  const buildHyphenVariants = (s: string): string[] => {
+    const v = new Set<string>();
+    const base = normalizeQuery(s);
+    v.add(base);
+    if (base.includes('-')) {
+      v.add(base.replace(/-/g, ''));
+      v.add(base.replace(/-/g, ' '));
+    }
+    return Array.from(v);
+  };
+
+  const tokenizeWords = (s: string): string[] => normalizeQuery(s).split(/\s+/).filter(Boolean);
+
+  const buildNgrams = (s: string, minLen = 3, maxLen = 6, cap = 4): string[] => {
+    const words = tokenizeWords(s);
+    const grams: string[] = [];
+    for (let n = Math.min(maxLen, words.length); n >= minLen; n--) {
+      for (let i = 0; i + n <= words.length; i++) {
+        grams.push(words.slice(i, i + n).join(' '));
+      }
+      if (grams.length >= cap) break;
+    }
+    return grams.slice(0, cap);
+  };
+
   // Utility: clear prior overlays within this viewer
   const clearCircleOverlays = () => {
     const container = rootRef.current;
     if (!container) return;
     const overlays = container.querySelectorAll('[data-circle-overlay="1"]');
     overlays.forEach((el) => el.parentElement?.removeChild(el));
+  };
+
+  // Highlight overlays (separate from circles)
+  const clearHighlightOverlays = () => {
+    const container = rootRef.current;
+    if (!container) return;
+    const overlays = container.querySelectorAll('[data-highlight-overlay="1"]');
+    overlays.forEach((el) => el.parentElement?.removeChild(el));
+  };
+
+  const drawHighlightOnPage = (pageIndex: number, rect: { left: number; top: number; width: number; height: number }) => {
+    try {
+      const layer = document.querySelector(`[data-testid="core__page-layer-${pageIndex}"]`) as HTMLElement | null;
+      if (!layer) return;
+      // De-dup: if an overlay with the same rounded rect exists on this page, skip
+      const key = `${pageIndex}:${Math.round(Math.max(0, rect.left))}:${Math.round(Math.max(0, rect.top))}:${Math.round(Math.max(1, rect.width))}:${Math.round(Math.max(1, rect.height))}`;
+      const existing = layer.querySelector(`[data-highlight-key="${key}"]`);
+      if (existing) return;
+      const overlay = document.createElement('div');
+      overlay.setAttribute('data-highlight-overlay', '1');
+      overlay.setAttribute('data-highlight-key', key);
+      overlay.style.position = 'absolute';
+      overlay.style.left = `${Math.max(0, rect.left)}px`;
+      overlay.style.top = `${Math.max(0, rect.top)}px`;
+      overlay.style.width = `${Math.max(1, rect.width)}px`;
+      overlay.style.height = `${Math.max(1, rect.height)}px`;
+      overlay.style.background = 'rgba(255, 235, 59, 0.22)';
+      overlay.style.border = '1px solid rgba(255, 193, 7, 0.45)';
+      overlay.style.borderRadius = '4px';
+      overlay.style.pointerEvents = 'none';
+      overlay.style.zIndex = '3';
+      layer.appendChild(overlay);
+    } catch {}
+  };
+
+  // Word-by-word overlay
+  const drawWordOverlay = (pageIndex: number, rect: { left: number; top: number; width: number; height: number }, active: boolean) => {
+    try {
+      const layer = document.querySelector(`[data-testid="core__page-layer-${pageIndex}"]`) as HTMLElement | null;
+      if (!layer) return;
+      const key = `w:${pageIndex}:${Math.round(Math.max(0, rect.left))}:${Math.round(Math.max(0, rect.top))}:${Math.round(Math.max(1, rect.width))}:${Math.round(Math.max(1, rect.height))}`;
+      const existing = layer.querySelector(`[data-highlight-key="${key}"]`);
+      if (existing) return;
+      const overlay = document.createElement('div');
+      overlay.setAttribute('data-highlight-overlay', '1');
+      overlay.setAttribute('data-highlight-key', key);
+      overlay.style.position = 'absolute';
+      overlay.style.left = `${Math.max(0, rect.left)}px`;
+      overlay.style.top = `${Math.max(0, rect.top)}px`;
+      overlay.style.width = `${Math.max(1, rect.width)}px`;
+      overlay.style.height = `${Math.max(1, rect.height)}px`;
+      overlay.style.background = active ? 'rgba(255, 230, 0, 0.45)' : 'rgba(255, 235, 59, 0.18)';
+      overlay.style.border = active ? '1px solid rgba(255, 200, 0, 0.75)' : '1px solid rgba(255, 193, 7, 0.4)';
+      overlay.style.borderRadius = '3px';
+      overlay.style.pointerEvents = 'none';
+      overlay.style.zIndex = active ? '5' : '4';
+      layer.appendChild(overlay);
+    } catch {}
+  };
+
+  // Helpers to traverse text nodes (used by sentence expansion)
+  const getTextWalker = (root: Node) => document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const previousTextNode = (root: Node, from: Node | null): Node | null => {
+    if (!from) return null;
+    const walker = getTextWalker(root);
+    let prev: Node | null = null;
+    let n: Node | null = walker.nextNode();
+    while (n) {
+      if (n === from) return prev;
+      prev = n;
+      n = walker.nextNode();
+    }
+    return null;
+  };
+  const nextTextNode = (root: Node, from: Node | null): Node | null => {
+    if (!from) return null;
+    const walker = getTextWalker(root);
+    let n: Node | null = walker.nextNode();
+    let found = false;
+    while (n) {
+      if (found) return n;
+      if (n === from) found = true;
+      n = walker.nextNode();
+    }
+    return null;
+  };
+
+  // Collect word rects within a sentence bounding box (page-relative coords)
+  const collectWordRectsInArea = (layer: HTMLElement, clip: DOMRect): Array<{ word: string; rect: { left: number; top: number; width: number; height: number } }> => {
+    const layerRect = layer.getBoundingClientRect();
+    const intersects = (r: DOMRect) => !(r.right < clip.left || r.left > clip.right || r.bottom < clip.top || r.top > clip.bottom);
+    const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
+    const results: Array<{ word: string; rect: { left: number; top: number; width: number; height: number } }> = [];
+    let n: Node | null = walker.nextNode();
+    while (n) {
+      const raw = (n.nodeValue || '').replace(/\s+/g, ' ');
+      if (raw.trim().length) {
+        // Probe whole node rect first
+        try {
+          const fullRange = document.createRange();
+          fullRange.selectNodeContents(n);
+          const fullRect = fullRange.getBoundingClientRect();
+          if (intersects(fullRect)) {
+            // Enumerate words with positions
+            const text = raw;
+            // index not needed; re.exec maintains state
+            const re = /\S+/g;
+            let m: RegExpExecArray | null;
+            while ((m = re.exec(text)) !== null) {
+              const start = m.index;
+              const end = start + m[0].length;
+              try {
+                const r = document.createRange();
+                // Map back to original node indices; since we normalized spaces, approximate by scanning original
+                const original = (n.nodeValue || '');
+                const mapping = original.replace(/\s+/g, ' ');
+                const delta = start;
+                const deltaEnd = end;
+                // Find approximate offsets in original string by walking
+                let oi = 0, ci = 0, startO = 0, endO = 0;
+                while (oi < original.length && ci < mapping.length) {
+                  const oc = original[oi];
+                  const mc = mapping[ci];
+                  if (/\s/.test(oc) && /\s/.test(mc)) {
+                    while (oi < original.length && /\s/.test(original[oi])) oi++;
+                    while (ci < mapping.length && /\s/.test(mapping[ci])) ci++;
+                    continue;
+                  }
+                  if (ci === delta) startO = oi;
+                  if (ci === deltaEnd) { endO = oi; break; }
+                  oi++; ci++;
+                }
+                if (!endO) endO = Math.min(original.length, startO + (end - start));
+                r.setStart(n, Math.max(0, startO));
+                r.setEnd(n, Math.max(0, endO));
+                const rect = r.getBoundingClientRect();
+                if (rect && rect.width > 0 && rect.height > 0 && intersects(rect)) {
+                  results.push({
+                    word: m[0],
+                    rect: {
+                      left: rect.left - layerRect.left,
+                      top: rect.top - layerRect.top,
+                      width: rect.width,
+                      height: rect.height,
+                    },
+                  });
+                }
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+      n = walker.nextNode();
+    }
+    return results;
+  };
+
+  // Semantic stepper state
+  const semanticStepperRef = useRef<{
+    pageIndex: number;
+    words: string[];
+    rects: Array<{ word: string; rect: { left: number; top: number; width: number; height: number } }>;
+    idx: number;
+    lastStepMs: number;
+  } | null>(null);
+
+  const resetSemanticStepper = () => { semanticStepperRef.current = null; };
+
+  // Track active semantic sentence overlays so we can re-apply them after
+  // search plugin DOM updates without losing prior ones (no flashing).
+  const activeSemanticOverlaysRef = useRef<Array<{ text: string; pageIndex: number; ts: number }>>([]);
+
+  const advanceSemanticWord = () => {
+    const st = semanticStepperRef.current;
+    if (!st) return;
+    const now = performance.now();
+    if (now - st.lastStepMs < semanticPaceRef.current.dwellMs * 0.9) return;
+    st.lastStepMs = now;
+    // draw next word overlay
+    const targetWord = st.words[st.idx]?.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!targetWord) return;
+    // find next matching rect after current idx
+    for (let i = 0; i < st.rects.length; i++) {
+      const candidate = st.rects[i];
+      const norm = String(candidate.word || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (norm === targetWord) {
+        drawWordOverlay(st.pageIndex, candidate.rect, true);
+        break;
+      }
+    }
+    st.idx = Math.min(st.words.length, st.idx + 1);
+  };
+
+  const expandRangeToSentence = (range: Range, layer: HTMLElement): Range => {
+    try {
+      const r = range.cloneRange();
+      // expand left
+      let sNode: Node | null = r.startContainer;
+      let sOffset = r.startOffset;
+      while (sNode) {
+        const text = (sNode.nodeValue || '');
+        const left = text.slice(0, sOffset);
+        const idx = Math.max(left.lastIndexOf('.'), left.lastIndexOf('!'), left.lastIndexOf('?'));
+        if (idx >= 0) { r.setStart(sNode, idx + 1); break; }
+        const prev = previousTextNode(layer, sNode);
+        if (!prev) { r.setStart(sNode, 0); break; }
+        sNode = prev;
+        sOffset = (sNode.nodeValue || '').length;
+      }
+      // expand right
+      let eNode: Node | null = r.endContainer;
+      let eOffset = r.endOffset;
+      while (eNode) {
+        const text = (eNode.nodeValue || '');
+        const right = text.slice(eOffset);
+        const idx = [right.indexOf('.'), right.indexOf('!'), right.indexOf('?')]
+          .filter((v) => v >= 0).sort((a,b)=>a-b)[0];
+        if (idx !== undefined) { r.setEnd(eNode, Math.min(text.length, eOffset + idx + 1)); break; }
+        const nxt = nextTextNode(layer, eNode);
+        if (!nxt) { r.setEnd(eNode, text.length); break; }
+        eNode = nxt;
+        eOffset = 0;
+      }
+      return r;
+    } catch { return range; }
+  };
+
+  const drawRangeOverlays = (pageIndex: number, range: Range) => {
+    try {
+      const rects = Array.from(range.getClientRects());
+      const layer = document.querySelector(`[data-testid=\"core__page-layer-${pageIndex}\"]`) as HTMLElement | null;
+      if (!layer) return;
+      const layerRect = layer.getBoundingClientRect();
+      rects.forEach((rc) => {
+        drawHighlightOnPage(pageIndex, {
+          left: rc.left - layerRect.left,
+          top: rc.top - layerRect.top,
+          width: rc.width,
+          height: rc.height,
+        });
+      });
+    } catch {}
   };
 
   // Listen for events to circle a specific text (e.g., "Table 1")
@@ -635,8 +1034,13 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   }, [isDocLoaded, pageNavigationPluginInstance]);
 
   // Highlight queue to prevent conflicts
-  const highlightQueueRef = useRef<Array<{ requestId: string; keywords: any; timestamp: number }>>([]);
+  const highlightQueueRef = useRef<Array<{ requestId: string; keywords: any; timestamp: number; forceRefresh?: boolean }>>([]);
   const processingHighlightRef = useRef<boolean>(false);
+  // Maintain separate buckets so semantic highlights can evolve while keeping baseline/quote highlights
+  const baselineKeywordsRef = useRef<SingleKeyword[]>([]);
+  const recentSemanticKeywordsRef = useRef<string[]>([]);
+  const quoteKeywordsRef = useRef<SingleKeyword[]>([]);
+  const MAX_SEMANTIC_KEYWORDS = 5;
 
   const processHighlightQueue = async () => {
     if (processingHighlightRef.current || highlightQueueRef.current.length === 0) {
@@ -655,22 +1059,91 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     console.log("🔍 PDF: Processing highlight request:", { requestId, keywords: reqKeywords });
 
     try {
-      // Clear previous highlights
-      if (searchPluginInstanceRef.current) {
-        searchPluginInstanceRef.current.clearHighlights();
-        console.log("🔍 PDF: Previous highlights cleared");
-      }
-      
-      // Only clear circles for new search operations, not for quote highlighting
+      const isSemanticFragment = currentRequest.requestId.includes('semantic-fragment');
       const isQuoteHighlight = currentRequest.requestId.includes('quote-highlight');
-      if (!isQuoteHighlight) {
-        clearAllCircles();
-        console.log("🔍 PDF: Previous circles cleared (new search operation)");
+      const isCircleSearch = currentRequest.requestId.includes('circle-');
+      const forceRefresh = !!currentRequest.forceRefresh;
+
+      // Decide whether to merge with existing highlights or replace them
+      let keywordsToApply: SingleKeyword[] = Array.isArray(reqKeywords)
+        ? (reqKeywords as SingleKeyword[])
+        : [reqKeywords as SingleKeyword];
+
+      if (forceRefresh) {
+        // For dynamic speech updates, rebuild full set (no clear to avoid flash)
+        const semanticKws: SingleKeyword[] = recentSemanticKeywordsRef.current.map((s) => ({ keyword: s, matchCase: false }));
+        keywordsToApply = [
+          ...baselineKeywordsRef.current,
+          ...quoteKeywordsRef.current,
+          ...semanticKws,
+        ];
+      } else if (isSemanticFragment) {
+        // Update sliding window of recent semantic keywords (phrases + tokens)
+        const incoming = (Array.isArray(reqKeywords) ? reqKeywords : [reqKeywords]) as any[];
+        const incomingStrings: string[] = incoming.map((k) => (typeof k === 'string' ? k : String(k?.keyword || ''))).filter(Boolean);
+        incomingStrings.forEach((s) => {
+          const norm = s.trim();
+          if (!norm) return;
+          const exists = recentSemanticKeywordsRef.current.find((x) => x.toLowerCase() === norm.toLowerCase());
+          if (!exists) recentSemanticKeywordsRef.current.push(norm);
+        });
+        // Cap recent semantic to last N items
+        if (recentSemanticKeywordsRef.current.length > MAX_SEMANTIC_KEYWORDS) {
+          recentSemanticKeywordsRef.current.splice(0, recentSemanticKeywordsRef.current.length - MAX_SEMANTIC_KEYWORDS);
+        }
+
+        // Build combined keywords: baseline + quotes + recent semantic
+        const semanticKws: SingleKeyword[] = recentSemanticKeywordsRef.current.map((s) => ({ keyword: s, matchCase: false }));
+        const combined: SingleKeyword[] = [
+          ...baselineKeywordsRef.current,
+          ...quoteKeywordsRef.current,
+          ...semanticKws,
+        ];
+        keywordsToApply = combined;
+        // In merge mode, DO NOT clear highlights or circles
+      } else if (isQuoteHighlight) {
+        // Update persistent quote keywords (dedup + cap small)
+        const incoming = (Array.isArray(reqKeywords) ? reqKeywords : [reqKeywords]) as SingleKeyword[];
+        const map = new Map<string, SingleKeyword>();
+        // existing
+        quoteKeywordsRef.current.forEach((k) => map.set((k as any)?.keyword?.toLowerCase?.() || String(k).toLowerCase(), k));
+        // add incoming
+        incoming.forEach((k) => {
+          const key = (k as any)?.keyword?.toLowerCase?.() || String(k).toLowerCase();
+          if (!map.has(key)) map.set(key, k);
+        });
+        quoteKeywordsRef.current = Array.from(map.values()).slice(0, 10);
+
+        const semanticKws: SingleKeyword[] = recentSemanticKeywordsRef.current.map((s) => ({ keyword: s, matchCase: false }));
+        const combined: SingleKeyword[] = [
+          ...baselineKeywordsRef.current,
+          ...quoteKeywordsRef.current,
+          ...semanticKws,
+        ];
+        keywordsToApply = combined;
+        // In merge mode, DO NOT clear highlights or circles
       } else {
-        console.log("🔍 PDF: Keeping circles visible (quote highlighting)");
+        // Replace baseline: clear previous highlights, and circles for non-quote operations
+        if (searchPluginInstanceRef.current) {
+          searchPluginInstanceRef.current.clearHighlights();
+          console.log("🔍 PDF: Previous highlights cleared");
+        }
+        if (!isQuoteHighlight) {
+          clearAllCircles();
+          console.log("🔍 PDF: Previous circles cleared (new search operation)");
+        } else {
+          console.log("🔍 PDF: Keeping circles visible (quote highlighting)");
+        }
+
+        // Update baseline keywords unless this is a circle label search
+        if (!isCircleSearch) {
+          baselineKeywordsRef.current = Array.isArray(reqKeywords)
+            ? (reqKeywords as SingleKeyword[])
+            : [reqKeywords as SingleKeyword];
+        }
       }
 
-      // Small delay to ensure clearing is complete
+      // Small delay to ensure clearing is complete before applying new highlights
       await new Promise(resolve => setTimeout(resolve, 50));
 
       if (!searchPluginInstanceRef.current) {
@@ -678,7 +1151,12 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         return;
       }
       
-      const matches = await searchPluginInstanceRef.current.highlight(reqKeywords as any);
+      // Limit plugin highlights: for semantic updates we only keep baseline/quotes
+      const isSemantic = typeof requestId === 'string' && requestId.startsWith('semantic-');
+      const pluginKeywords = (isSemantic || forceRefresh)
+        ? ([...baselineKeywordsRef.current, ...quoteKeywordsRef.current] as any)
+        : (keywordsToApply as any);
+      const matches = await searchPluginInstanceRef.current.highlight(pluginKeywords);
       console.log("🔍 PDF: Real search results found:", matches.length, "matches");
       
       const results = matches.map((m, i) => {
@@ -703,9 +1181,36 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       });
       
       console.log("🔍 PDF: Processed real search results:", results.length, "total matches");
+      // Persist only baseline + quote keywords so we don't accidentally re-expand
+      // semantic phrases across entire pages during refreshes
+      lastKeywordsRef.current = ([...baselineKeywordsRef.current, ...quoteKeywordsRef.current] as any);
       window.dispatchEvent(new CustomEvent('pdf-search-results', {
         detail: { requestId, results }
       }));
+
+      // Re-apply active semantic overlays after highlights are applied to avoid
+      // losing them during react-pdf-viewer DOM updates
+      try {
+        const isSemantic = typeof requestId === 'string' && requestId.startsWith('semantic-');
+        if (isSemantic && activeSemanticOverlaysRef.current.length) {
+          const overlays = [...activeSemanticOverlaysRef.current];
+          setTimeout(() => {
+            overlays.forEach((info) => {
+              try {
+                const layer = document.querySelector(`[data-testid=\"core__page-layer-${info.pageIndex}\"]`) as HTMLElement | null;
+                if (!layer) return;
+                const first = findTextRectInElement(layer, info.text);
+                const second = !first ? findTextRectInElement(layer, info.text.replace(/-\s+/g, '').replace(/\s+/g, ' ')) : null;
+                const found = first || second;
+                if (found?.range) {
+                  const sentence = expandRangeToSentence(found.range, layer);
+                  drawRangeOverlays(info.pageIndex, sentence);
+                }
+              } catch {}
+            });
+          }, 10);
+        }
+      } catch {}
       
     } catch (err) {
       console.error('🔍 PDF: Search request failed', err);
@@ -731,11 +1236,39 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         console.warn("🔍 PDF: No keywords provided for search");
         return;
       }
-      
-      // Add to queue instead of processing immediately
+
+      // Build robust variants for better matching (cross-line tolerant)
+      const asArray = Array.isArray(reqKeywords) ? reqKeywords as any[] : [reqKeywords as any];
+      const out: any[] = [];
+      const seen = new Set<string>();
+      const pushKw = (s: string) => {
+        const key = s.toLowerCase();
+        if (key && !seen.has(key)) { out.push({ keyword: s, matchCase: false }); seen.add(key); }
+      };
+      asArray.forEach((k) => {
+        const term = typeof k === 'string' ? k : (k?.keyword ?? '');
+        const normalized = normalizeQuery(String(term || ''));
+        if (!normalized) return;
+        // Prefer n-grams for long phrases
+        const grams = buildNgrams(normalized, 3, 6, 4);
+        if (grams.length) grams.forEach(g => buildHyphenVariants(g).forEach(pushKw));
+        else buildHyphenVariants(normalized).forEach(pushKw);
+      });
+      // Add flexible regex variants that ignore newlines/soft hyphens for longer phrases
+      const regexes: RegExp[] = [];
+      for (const k of out) {
+        const s = typeof k === 'string' ? k : (k?.keyword ?? '');
+        if (typeof s === 'string' && s.trim().split(/\s+/).length >= 3) {
+          try { regexes.push(buildFlexibleRegexFromPhrase(s)); } catch {}
+        }
+      }
+      // Cap total entries to keep performance reasonable
+      const finalKeywords: any[] = [...out.slice(0, 12), ...regexes.slice(0, 6)];
+
+      // Add to queue instead of processing immediately (do not clear user highlights here; processor handles)
       highlightQueueRef.current.push({
         requestId,
-        keywords: reqKeywords,
+        keywords: finalKeywords,
         timestamp: Date.now()
       });
       
@@ -798,10 +1331,12 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         if (searchPluginInstanceRef.current) {
           searchPluginInstanceRef.current.clearHighlights(); 
         }
-        // Only clear circles if explicitly requested via 'tutor-annotations-clear' event
-        // Don't automatically clear circles with every highlight clear
-        console.log("🔍 PDF: Cleared highlights (circles preserved)");
       } catch {}
+      try { clearHighlightOverlays(); } catch {}
+      try { activeSemanticOverlaysRef.current = []; } catch {}
+      try { resetSemanticStepper(); } catch {}
+      // Circles remain until explicitly cleared via 'tutor-annotations-clear'
+      console.log("🔍 PDF: Cleared text highlights and overlays (circles preserved)");
     };
 
     window.addEventListener('pdf-search-request', handleSearchRequest);
@@ -815,6 +1350,66 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       window.removeEventListener('pdf-jump-to', handleJumpTo);
       window.removeEventListener('pdf-clear-highlights', handleClearHighlights);
     };
+  }, []);
+
+  // Listen for active-section activation; set bounds for constrained semantic search
+  useEffect(() => {
+    const handler = (ev: any) => {
+      const title = String(ev?.detail?.title || '').trim();
+      if (!title) return;
+      try {
+        const outline: Array<{ title: string; pageIndex: number }> = (window as any).__pdfOutline || [];
+        const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+        const match = outline.find((s) => normalize(s.title).includes(normalize(title)) || normalize(title).includes(normalize(s.title)));
+        if (!match) return;
+        const pageIndex = match.pageIndex;
+        const layer = document.querySelector(`[data-testid="core__page-layer-${pageIndex}"]`) as HTMLElement | null;
+        if (!layer) {
+          // Defer until layer renders
+          setTimeout(() => window.dispatchEvent(new CustomEvent('pdf-set-active-section', { detail: { title } })), 120);
+          return;
+        }
+        // Find title rect and create a conservative page-bounded region below it
+        const found = findTextRectInElement(layer, match.title) || findTextRectInElement(layer, title);
+        const layerRect = layer.getBoundingClientRect();
+        let bounds: { left: number; top: number; right: number; bottom: number } | undefined;
+        if (found?.rect) {
+          const localTop = Math.max(0, found.rect.top - layerRect.top);
+          // Column-aware bounds: detect dominant column gap and clamp to the
+          // column containing the section title so we never span both columns.
+          const textEls = Array.from(layer.querySelectorAll('span, div')).filter((el) => (el.textContent || '').trim().length > 0);
+          const positions = textEls.map((el) => (el.getBoundingClientRect().left - layerRect.left)).sort((a, b) => a - b);
+          let columnBoundary = layerRect.width / 2;
+          let maxGap = 0;
+          for (let i = 1; i < positions.length; i++) {
+            const gap = positions[i] - positions[i - 1];
+            if (gap > maxGap && gap > 30) { maxGap = gap; columnBoundary = positions[i - 1] + gap / 2; }
+          }
+          const titleLeft = found.rect.left - layerRect.left;
+          const isLeftColumn = titleLeft < columnBoundary;
+          const margin = 12;
+          const colStart = isLeftColumn ? margin : Math.max(margin, columnBoundary + 2);
+          const colEnd = isLeftColumn ? Math.max(margin + 60, columnBoundary - 2) : layerRect.width - margin;
+          const height = Math.max(240, Math.min(720, layerRect.height * 0.5));
+          bounds = { left: colStart, top: localTop, right: colEnd, bottom: Math.min(layerRect.height - margin, localTop + height) };
+        }
+        (window as any).__activeSection = {
+          title: match.title,
+          page: pageIndex + 1,
+          startPage: pageIndex + 1,
+          endPage: pageIndex + 1,
+          boundsByPage: bounds ? { [pageIndex]: bounds } : undefined
+        };
+        // Highlight only the title text
+        const requestId = `section-title-${Date.now()}`;
+        window.dispatchEvent(new CustomEvent('pdf-search-request', {
+          detail: { requestId, keywords: [{ keyword: match.title, matchCase: false }] }
+        }));
+        try { scrollToPageIndex(pageIndex); } catch {}
+      } catch {}
+    };
+    window.addEventListener('pdf-set-active-section', handler as EventListener);
+    return () => window.removeEventListener('pdf-set-active-section', handler as EventListener);
   }, []);
 
   // Listen for requests to circle a table label (e.g., "Table 1") and highlight quotes
@@ -1466,10 +2061,14 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       // clearAllCircles(); // Removed - let circles stay visible with quotes
       console.log('🎯 PDF: Keeping circles visible during quote highlighting');
       
-      // Add to highlight queue instead of immediate processing to prevent flashing
+      // Phrase-only highlighting to avoid tiny token matches
+      const phrase = String(text || '').replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'").replace(/\s+/g, ' ').trim();
+      const keywordObjects: Array<{ keyword: string; matchCase: boolean }> = phrase ? [{ keyword: phrase, matchCase: false }] : [];
+
+      // Add to highlight queue; merge mode handled in processor
       highlightQueueRef.current.push({
         requestId,
-        keywords: [{ keyword: text.trim(), matchCase: false }],
+        keywords: keywordObjects,
         timestamp: Date.now()
       });
       
@@ -1542,20 +2141,36 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             await new Promise(resolve => setTimeout(resolve, 200));
             
             try {
-              // Use the label highlight bounds as OCR anchor
-              const hlEls = layer.querySelectorAll('.rpv-search__highlight');
+              // Use the TOP-MOST label highlight as OCR anchor (avoid merging across columns)
+              const hlEls = Array.from(layer.querySelectorAll('.rpv-search__highlight')) as HTMLElement[];
               let anchor: { left: number; top: number; width: number; height: number } | undefined;
               if (hlEls && hlEls.length > 0) {
                 const layerRect = layer.getBoundingClientRect();
-                let minLeft = Number.POSITIVE_INFINITY, minTop = Number.POSITIVE_INFINITY, maxRight = 0, maxBottom = 0;
-                hlEls.forEach((n) => { const r = (n as HTMLElement).getBoundingClientRect(); minLeft = Math.min(minLeft, r.left); minTop = Math.min(minTop, r.top); maxRight = Math.max(maxRight, r.right); maxBottom = Math.max(maxBottom, r.bottom); });
-                anchor = {
-                  left: minLeft - layerRect.left,
-                  top: minTop - layerRect.top,
-                  width: Math.max(1, maxRight - minLeft),
-                  height: Math.max(1, maxBottom - minTop),
-                };
-                console.log(`🎯 OCR anchor for ${label}:`, anchor);
+                const topMost = hlEls
+                  .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+                  .sort((a, b) => a.rect.top - b.rect.top)[0];
+                if (topMost) {
+                  anchor = {
+                    left: topMost.rect.left - layerRect.left,
+                    top: topMost.rect.top - layerRect.top,
+                    width: Math.max(1, topMost.rect.width),
+                    height: Math.max(1, topMost.rect.height),
+                  };
+                }
+                console.log(`🎯 OCR anchor (top-most) for ${label}:`, anchor);
+              }
+              // Fallback: try direct text search for the label in the layer
+              if (!anchor) {
+                const hit = findTextRectInElement(layer, label);
+                if (hit?.rect) {
+                  const layerRect = layer.getBoundingClientRect();
+                  anchor = {
+                    left: hit.rect.left - layerRect.left,
+                    top: hit.rect.top - layerRect.top,
+                    width: hit.rect.width,
+                    height: hit.rect.height,
+                  };
+                }
               }
 
               const bounds = await ocrDetectTableBoundsFromLayer(layer, anchor);
@@ -1564,15 +2179,24 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                 drawCircleOnPage(first.pageIndex, bounds);
                 try { scrollToPageIndex(first.pageIndex); } catch {}
               } else {
-                console.log('🎯 OCR returned invalid bounds; using anchor fallback');
+                console.log('🎯 OCR returned invalid bounds; using column-aware anchor fallback');
                 if (anchor) {
-                  // Use anchor as fallback with reasonable table dimensions
-                  // Position below the anchor where the table actually is
+                  const layerRect = layer.getBoundingClientRect();
+                  // Detect column boundary and clamp width to the anchor's column
+                  const textEls = Array.from(layer.querySelectorAll('span, div')).filter((el) => (el.textContent || '').trim().length > 0);
+                  const positions = textEls.map((el) => (el.getBoundingClientRect().left - layerRect.left)).sort((a, b) => a - b);
+                  let columnBoundary = layerRect.width / 2; let maxGap = 0;
+                  for (let i = 1; i < positions.length; i++) { const gap = positions[i] - positions[i - 1]; if (gap > maxGap && gap > 30) { maxGap = gap; columnBoundary = positions[i - 1] + gap / 2; } }
+                  const isLeftColumn = anchor.left < columnBoundary;
+                  const colEnd = isLeftColumn ? Math.max(80, columnBoundary - 2) : layerRect.width - 12;
+                  const margin = 12;
+                  const width = Math.max(120, Math.min(colEnd - anchor.left - margin, Math.max(anchor.width * 2.2, 180)));
+                  const height = Math.max(160, Math.min(360, layerRect.height * 0.35));
                   const fallbackBounds = {
                     left: anchor.left,
-                    top: anchor.top + anchor.height + 10, // Position below the anchor where table is
-                    width: Math.min(anchor.width * 3, layer.getBoundingClientRect().width - anchor.left - 20),
-                    height: 200
+                    top: Math.min(layerRect.height - height - margin, anchor.top + anchor.height + 8),
+                    width,
+                    height,
                   };
                   drawCircleOnPage(first.pageIndex, fallbackBounds);
                   try { scrollToPageIndex(first.pageIndex); } catch {}
@@ -1689,6 +2313,30 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             
             drawCircleOnPage(pageIndex, sectionBounds);
             try { scrollToPageIndex(pageIndex); } catch {}
+            // Persist active section context for current and next page
+            try {
+              const boundsForPage = {
+                left: sectionBounds.left,
+                top: sectionBounds.top,
+                right: sectionBounds.left + sectionBounds.width,
+                bottom: sectionBounds.top + sectionBounds.height,
+              };
+              const approxNextPageBounds = {
+                left: 10,
+                top: 20,
+                right: layerRect.width - 10,
+                bottom: layerRect.height - 40,
+              };
+              (window as any).__activeSection = {
+                title: sectionTitle,
+                startPage: pageIndex + 1,
+                endPage: pageIndex + 2,
+                boundsByPage: {
+                  [pageIndex]: boundsForPage,
+                  [pageIndex + 1]: approxNextPageBounds,
+                },
+              };
+            } catch {}
             console.log(`🎯 Circled entire section "${sectionTitle}" with bounds:`, sectionBounds);
           } else {
             console.log('🎯 Could not find section title, using full page area');
@@ -1701,6 +2349,22 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
               height: Math.min(500, layerRect.height - 100)
             };
             drawCircleOnPage(pageIndex, sectionBounds);
+            // Persist active section even on fallback bounds
+            try {
+              (window as any).__activeSection = {
+                title: sectionTitle,
+                startPage: pageIndex + 1,
+                endPage: pageIndex + 2,
+                boundsByPage: {
+                  [pageIndex]: {
+                    left: sectionBounds.left,
+                    top: sectionBounds.top,
+                    right: sectionBounds.left + sectionBounds.width,
+                    bottom: sectionBounds.top + sectionBounds.height,
+                  },
+                },
+              };
+            } catch {}
           }
         } catch (error) {
           console.error('🎯 Error circling section:', error);
@@ -1717,24 +2381,243 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     window.addEventListener('tutor-highlight-quote', handleHighlightQuote as EventListener);
     window.addEventListener('tutor-highlight-content-ocr', handleHighlightContentOCR as EventListener);
     
-    // Handle semantic fragment highlighting
-    const handleSemanticFragment = (event: any) => {
-      const { text, page, similarity, query, chunkId, startIndex, endIndex } = event.detail || {};
+  // Handle semantic fragment highlighting
+  const handleSemanticFragment = (event: any) => {
+      const { text, page, similarity, query, chunkId, startIndex, endIndex, keywords: incomingKeywords } = event.detail || {};
       console.log(`🎯 Received semantic fragment event:`, { text: text?.substring(0, 50), similarity, query, chunkId });
+
+      // Dedupe: skip if identical semantic target as last
+      (handleSemanticFragment as any)._lastSemId = (handleSemanticFragment as any)._lastSemId || null;
+
+      // Dedup guard: skip if same normalized text arrived very recently
+      const normalizedNow = String(text || '')
+        .replace(/[\u201C\u201D]/g, '"')
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/\s+/g, ' ')
+        .trim();
+      (window as any).__lastSemanticText = (window as any).__lastSemanticText || '';
+      (window as any).__lastSemanticTs = (window as any).__lastSemanticTs || 0;
+      (window as any).__lastSemanticApplyTs = (window as any).__lastSemanticApplyTs || 0;
+      const lastTxt: string = (window as any).__lastSemanticText;
+      const lastTs: number = Number((window as any).__lastSemanticTs) || 0;
+      const nowMs = Date.now();
+      const isDuplicate = normalizedNow && lastTxt && normalizedNow.toLowerCase() === lastTxt.toLowerCase();
+      const within300ms = nowMs - lastTs < Math.min(semanticPaceRef.current.dwellMs / 3, 400);
+      if (isDuplicate && within300ms) {
+        console.log('🎯 Skipping duplicate semantic fragment within 300ms');
+        return;
+      }
+      (window as any).__lastSemanticText = normalizedNow;
+      (window as any).__lastSemanticTs = nowMs;
       
-      if (text && similarity > 0.5) {
+      if (text && (typeof similarity !== 'number' || similarity >= 0.3)) {
         console.log(`🎯 Highlighting semantic fragment (${similarity.toFixed(2)} similarity):`, text.substring(0, 50) + '...');
         
-        // Use the existing highlight system to highlight this specific fragment
+        // Use the existing highlight system; PHRASE-ONLY to avoid short token matches; MERGE with existing highlights
         const requestId = `semantic-fragment-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        
-        // Search for this exact text fragment
-        window.dispatchEvent(new CustomEvent('pdf-search-request', {
-          detail: {
-            requestId,
-            keywords: [{ keyword: text, matchCase: false }]
+
+        const normalized = String(text || '')
+          .replace(/[\u201C\u201D]/g, '"')
+          .replace(/[\u2018\u2019]/g, "'")
+          .replace(/\s+/g, ' ')
+          .trim();
+
+        // Build tokens only for overlay fallbacks (we won't highlight tokens)
+        const stop = new Set(['the','and','for','with','this','that','from','into','onto','over','very','more','most','such','than','then','also','can','may','might','will','would','could','been','have','has','had','each','both','about','above','below']);
+        const tokens = normalized.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+          .filter((w) => w.length > 3 && !stop.has(w));
+        const uniq: string[] = [];
+        for (const w of tokens) { if (!uniq.includes(w)) uniq.push(w); }
+        const tokenSubset = uniq.slice(0, 5);
+
+        // Phrase-only highlighting to avoid title-token matches
+        const extra = Array.isArray(incomingKeywords) ? incomingKeywords.filter(Boolean) : [];
+        const phrase = normalized;
+        const wordCount = phrase.split(/\s+/).filter(Boolean).length;
+        if (wordCount < 2 || phrase.length < 12) {
+          console.log('🎯 Skipping too-short semantic phrase');
+          return;
+        }
+        const keywordObjects: Array<{ keyword: string; matchCase: boolean }> = [{ keyword: phrase, matchCase: false }];
+
+        // Compute a semantic-id to detect repeats and reset between utterances
+        const semId = String(chunkId || `${page || 'P'}`);
+        (handleSemanticFragment as any)._lastSemId = semId;
+
+        // Pace updates: enforce minimum dwell between applied highlights
+        const lastApply: number = Number((window as any).__lastSemanticApplyTs) || 0;
+        const minDwell = semanticPaceRef.current.dwellMs;
+        if ((nowMs - lastApply < minDwell) || !audioGateOpenRef.current) {
+          console.log('🎯 Pacing semantic highlight (too soon)');
+          return;
+        }
+        audioGateOpenRef.current = false;
+        (window as any).__lastSemanticApplyTs = nowMs;
+
+        // Do not clear overlays between fragments; allow semantic overlays
+        // to accumulate until the next utterance begins
+
+        // Immediate sentence overlay attempt within the active section (can span pages)
+        try {
+          let targetIndex: number | null = null;
+          // 1) Prefer pages from current lexical context (search_document)
+          try {
+            const s: any = (window as any).__pdfSearchState;
+            if (s && Array.isArray(s.steps) && s.steps.length > 0) {
+              const pages = s.steps.map((st: any) => st.pageIndex).filter((p: any) => typeof p === 'number');
+              const set = new Set<number>(pages);
+              if (typeof page === 'number' && page > 0 && set.has(page - 1)) {
+                targetIndex = page - 1;
+              } else {
+                const cur = typeof s.currentIndex === 'number' ? s.currentIndex : 0;
+                targetIndex = pages[cur] ?? pages[0] ?? null;
+              }
+            }
+          } catch {}
+          // 2) If not in context, but page is provided, use it
+          if (targetIndex === null && typeof page === 'number' && page > 0) {
+            targetIndex = page - 1;
           }
-        }));
+          // 3) Build candidate page indices constrained to the active section (to handle sections spanning pages)
+          const candidates: number[] = [];
+          if (targetIndex !== null && targetIndex >= 0) candidates.push(targetIndex);
+          try {
+            const active: any = (window as any).__activeSection;
+            if (active) {
+              const start = Number(active.startPage ?? active.page ?? active.start ?? 1) - 1;
+              const end = Number(active.endPage ?? active.page ?? active.end ?? start + 1) - 1;
+              for (let i = Math.max(0, start); i <= Math.max(start, end); i++) {
+                if (!candidates.includes(i)) candidates.push(i);
+              }
+            } else if (targetIndex !== null) {
+              // Also consider the immediate next page to catch split sections
+              if (!candidates.includes(targetIndex + 1)) candidates.push(targetIndex + 1);
+            }
+          } catch {}
+
+          // 4) Try each candidate page until we find a match
+          for (const candidate of candidates) {
+            if (candidate == null || candidate < 0) continue;
+            const layer = document.querySelector(`[data-testid=\"core__page-layer-${candidate}\"]`) as HTMLElement | null;
+            if (!layer) {
+              // Ensure the page is rendered, then try again shortly
+              try { pageNavigationPluginInstance.jumpToPage(candidate); } catch {}
+              try { scrollToPageIndex(candidate); } catch {}
+              setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('tutor-highlight-semantic-fragment', { detail: { text, page: candidate + 1, similarity, query: incomingKeywords?.[0]?.keyword || '', chunkId } }));
+              }, 180);
+              continue;
+            }
+            {
+              // Constrain matches to active section bounds on this page if known
+              let clip: { left: number; top: number; right: number; bottom: number } | undefined = undefined;
+              try {
+                const active: any = (window as any).__activeSection;
+                if (active && active.boundsByPage && active.boundsByPage[candidate]) {
+                  clip = active.boundsByPage[candidate];
+                }
+              } catch {}
+              // 1) Try full phrase
+              const firstTry = findTextRectInElement(layer, normalized, clip);
+              const secondTry = !firstTry ? findTextRectInElement(layer, normalized.replace(/-\s+/g, '').replace(/\s+/g, ' '), clip) : null;
+              const found = firstTry || secondTry;
+              if (found?.range) {
+                const sentence = expandRangeToSentence(found.range, layer);
+                drawRangeOverlays(candidate, sentence);
+                try {
+                  const entry = { text: normalized, pageIndex: candidate, ts: Date.now() };
+                  const list = activeSemanticOverlaysRef.current;
+                  // de-dup by text+page
+                  const key = (e: any) => `${e.pageIndex}|${e.text.toLowerCase()}`;
+                  const existsIdx = list.findIndex((e) => key(e) === key(entry));
+                  if (existsIdx >= 0) list.splice(existsIdx, 1);
+                  list.push(entry);
+                  // cap list size
+                  if (list.length > 8) list.splice(0, list.length - 8);
+                } catch {}
+                // Build word map inside sentence bounds for progressive highlighting
+                try {
+                  const sRect = sentence.getBoundingClientRect();
+                  const rects = collectWordRectsInArea(layer, sRect);
+                  const words = normalized.split(/\s+/).filter(Boolean);
+                  semanticStepperRef.current = {
+                    pageIndex: candidate,
+                    words,
+                    rects,
+                    idx: 0,
+                    lastStepMs: performance.now() - semanticPaceRef.current.dwellMs,
+                  };
+                } catch {}
+                break; // done
+              } else {
+                // 2) Build a composite range from multiple strong tokens
+                const tokenRanges: { range: Range; rect: DOMRect }[] = [];
+                for (const t of tokenSubset.slice(0, 4)) {
+                  const hit = findTextRectInElement(layer, t);
+                  if (hit?.range) tokenRanges.push(hit);
+                }
+                if (tokenRanges.length >= 2) {
+                  // Create a range spanning from first to last token on page
+                  const start = tokenRanges[0].range.cloneRange();
+                  const end = tokenRanges[tokenRanges.length - 1].range.cloneRange();
+                  const span = document.createRange();
+                  span.setStart(start.startContainer, start.startOffset);
+                  span.setEnd(end.endContainer, end.endOffset);
+                  const sentence = expandRangeToSentence(span, layer);
+                  drawRangeOverlays(candidate, sentence);
+                  try {
+                    const entry = { text: normalized, pageIndex: candidate, ts: Date.now() };
+                    const list = activeSemanticOverlaysRef.current;
+                    const key = (e: any) => `${e.pageIndex}|${e.text.toLowerCase()}`;
+                    const existsIdx = list.findIndex((e) => key(e) === key(entry));
+                    if (existsIdx >= 0) list.splice(existsIdx, 1);
+                    list.push(entry);
+                    if (list.length > 8) list.splice(0, list.length - 8);
+                  } catch {}
+                  break; // done
+                } else if (tokenRanges.length === 1) {
+                  // Expand single token to sentence
+                  const sentence = expandRangeToSentence(tokenRanges[0].range, layer);
+                  drawRangeOverlays(candidate, sentence);
+                  try {
+                    const entry = { text: normalized, pageIndex: candidate, ts: Date.now() };
+                    const list = activeSemanticOverlaysRef.current;
+                    const key = (e: any) => `${e.pageIndex}|${e.text.toLowerCase()}`;
+                    const existsIdx = list.findIndex((e) => key(e) === key(entry));
+                    if (existsIdx >= 0) list.splice(existsIdx, 1);
+                    list.push(entry);
+                    if (list.length > 8) list.splice(0, list.length - 8);
+                  } catch {}
+                  break; // done
+                }
+              }
+            }
+          }
+        } catch {}
+
+        // Also push phrase into native search accumulation without clearing
+        try {
+          // Track this phrase in the sliding window FIRST
+          const exists = recentSemanticKeywordsRef.current.find((x) => x.toLowerCase() === normalized.toLowerCase());
+          if (!exists) recentSemanticKeywordsRef.current.push(normalized);
+          if (recentSemanticKeywordsRef.current.length > MAX_SEMANTIC_KEYWORDS) {
+            recentSemanticKeywordsRef.current.splice(0, recentSemanticKeywordsRef.current.length - MAX_SEMANTIC_KEYWORDS);
+          }
+          const mergedKeywords = [
+            ...baselineKeywordsRef.current,
+            ...quoteKeywordsRef.current,
+            // Push both exact-phrase keywords and flexible regexes so newlines are ignored
+            ...recentSemanticKeywordsRef.current.map(s => ({ keyword: s, matchCase: false })),
+            ...recentSemanticKeywordsRef.current.map(s => buildFlexibleRegexFromPhrase(s)),
+          ];
+          highlightQueueRef.current.push({
+            requestId: `semantic-accum-${Date.now()}`,
+            keywords: mergedKeywords,
+            timestamp: Date.now(),
+            forceRefresh: true,
+          });
+          processHighlightQueue();
+        } catch {}
       } else {
         console.log(`🎯 Skipping semantic fragment (similarity ${similarity?.toFixed(2)} too low or no text)`);
       }
@@ -1770,6 +2653,81 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     }
   }, [lastKeywordsRef.current]);
 
+  useEffect(() => {
+    // Clear semantic overlays and stepper when a full transcript item arrives,
+    // not at utterance boundaries. Keeps highlights during multi-utterance items.
+    const handleTranscriptItem = () => {
+      try {
+        // Preserve baseline (e.g., section title) and quote highlights.
+        // Only reset semantic overlays/stepper and recent semantic phrases.
+        try { clearHighlightOverlays(); } catch {}
+        resetSemanticStepper();
+        recentSemanticKeywordsRef.current = [];
+
+        // Re-apply current baseline + quotes to ensure persistence
+        const refreshKeywords = [
+          ...baselineKeywordsRef.current,
+          ...quoteKeywordsRef.current,
+        ];
+        highlightQueueRef.current.push({
+          requestId: `semantic-refresh-${Date.now()}`,
+          keywords: refreshKeywords,
+          timestamp: Date.now(),
+          forceRefresh: true,
+        });
+        processHighlightQueue();
+        console.log('🔄 Transcript item: preserved baseline/quotes and reset semantic state');
+      } catch {}
+    };
+
+    window.addEventListener('tutor-transcript-item', handleTranscriptItem as EventListener);
+    return () => window.removeEventListener('tutor-transcript-item', handleTranscriptItem as EventListener);
+  }, []);
+
+  // Global pacing config for semantic highlights (updated via tutor-audio-pace)
+  const semanticPaceRef = useRef<{ dwellMs: number }>({ dwellMs: 900 });
+
+  useEffect(() => {
+    const handlePace = (ev: any) => {
+      const dwell = Number(ev?.detail?.dwellMs);
+      if (isFinite(dwell) && dwell > 300 && dwell < 3000) {
+        semanticPaceRef.current.dwellMs = dwell;
+        console.log('🎯 Updated semantic dwellMs to', dwell);
+      }
+    };
+    window.addEventListener('tutor-audio-pace', handlePace as EventListener);
+    return () => window.removeEventListener('tutor-audio-pace', handlePace as EventListener);
+  }, []);
+
+  const lastAudioTickRef = useRef<number>(0);
+  const audioGateOpenRef = useRef<boolean>(true);
+  useEffect(() => {
+    const onTick = (ev: any) => {
+      const t = Number(ev?.detail?.t) || 0;
+      const now = performance.now();
+      // Open gate if enough time passed based on dwell
+      if (now - lastAudioTickRef.current >= semanticPaceRef.current.dwellMs) {
+        audioGateOpenRef.current = true;
+        lastAudioTickRef.current = now;
+      }
+      // drive semantic stepper
+      try { advanceSemanticWord(); } catch {}
+    };
+    const onPace = (ev: any) => {
+      if (ev?.detail?.paused) {
+        audioGateOpenRef.current = false;
+      } else {
+        audioGateOpenRef.current = true;
+      }
+    };
+    window.addEventListener('tutor-audio-tick', onTick as EventListener);
+    window.addEventListener('tutor-audio-pace', onPace as EventListener);
+    return () => {
+      window.removeEventListener('tutor-audio-tick', onTick as EventListener);
+      window.removeEventListener('tutor-audio-pace', onPace as EventListener);
+    };
+  }, []);
+
   return (
     <div ref={rootRef} className="w-full h-full">
       <style>{`
@@ -1778,7 +2736,32 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
           border: 3px solid #ef4444 !important;
           box-shadow: 0 0 0 2px rgba(239,68,68,0.25) !important;
         }
+        .tutor-search-overlay { position: absolute; right: 16px; top: 16px; z-index: 10000; background: rgba(255,255,255,0.96); border: 1px solid #e5e7eb; border-radius: 10px; box-shadow: 0 6px 18px rgba(0,0,0,0.08); padding: 10px; display: flex; align-items: center; gap: 8px; }
+        .tutor-search-input { width: 320px; outline: none; border: 1px solid #e5e7eb; border-radius: 8px; padding: 6px 10px; font-size: 14px; }
+        .tutor-search-btn { background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+        .tutor-search-btn:hover { background: #e5e7eb; }
+        .tutor-search-counter { font-size: 12px; color: #475569; min-width: 58px; text-align: center; }
       `}</style>
+      {/* In-view search overlay to support Cmd/Ctrl+F with sentence search across line breaks */}
+      {showSearchOverlay && (
+        <div className="tutor-search-overlay" onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            if (e.shiftKey) jumpToPrev(); else jumpToNext();
+          }
+        }}>
+          <input
+            ref={searchInputRef}
+            className="tutor-search-input"
+            placeholder="Search in PDF..."
+            value={searchValue}
+            onChange={(e) => { setSearchValue(e.target.value); runSearch(e.target.value); }}
+          />
+          <span className="tutor-search-counter">{matchInfo.total ? `${matchInfo.current}/${matchInfo.total}` : '0/0'}</span>
+          <button className="tutor-search-btn" onClick={jumpToPrev} aria-label="Previous match">Prev</button>
+          <button className="tutor-search-btn" onClick={jumpToNext} aria-label="Next match">Next</button>
+          <button className="tutor-search-btn" onClick={closeSearchOverlay} aria-label="Close search">Close</button>
+        </div>
+      )}
       <Worker workerUrl="/pdf.worker.js">
         <div style={{ height: '100%' }}>
           <Viewer

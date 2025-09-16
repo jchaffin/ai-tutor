@@ -56,7 +56,7 @@ async function triggerSemanticSearch(utterance: string, sessionId?: string, utte
                   highlightIndex: index
                 }
               }));
-            }, index * 200); // 200ms delay between highlights
+            }, index * 120); // slightly faster cadence for responsiveness
           }
         });
         
@@ -284,8 +284,8 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
             }
           }));
 
-          // If this delta ends an utterance, emit an utterance marker and trigger semantic search
-          if (/[.!?]\s*$/.test(delta)) {
+          // If this delta ends an utterance, emit an utterance marker
+          if (/[.!?]\s*$/.test(delta) || delta.trim().length >= 30) {
             window.dispatchEvent(new CustomEvent('tutor-transcript-delta', {
               detail: {
                 itemId: (event as any).item_id || `response-utterance-${Date.now()}`,
@@ -296,10 +296,9 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
                 isComplete: false,
               }
             }));
-
-            // Also trigger semantic search for meaningful utterances
+            // Trigger semantic search from the agent utterance itself for live highlighting
             const cleanDelta = delta.trim();
-            if (cleanDelta.length > 3 && !/^[.!?]+$/.test(cleanDelta)) {
+            if (cleanDelta.length >= 8 && !/^[.!?]+$/.test(cleanDelta)) {
               const sessionId = `session-${Date.now()}`;
               const utteranceId = `utterance-${Date.now()}-${Math.random().toString(36).slice(2)}`;
               triggerSemanticSearch(delta, sessionId, utteranceId);
@@ -390,14 +389,13 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
     session.on("agent_tool_end", (details, agent, functionCall, result) => {
       console.log("🔧 TOOL END:", functionCall.name, result);
       historyHandlers.handleAgentToolEnd(details, agent, functionCall, result);
-      
-      // Handle semantic search tool results
+      // Handle semantic search tool results during speech for highlighting
       if (functionCall.name === 'semantic_search') {
         try {
           const toolResult = typeof result === 'string' ? JSON.parse(result) : result;
           if (toolResult?.shouldHighlight && toolResult?.results) {
             console.log("🔍 Processing semantic search results for highlighting:", toolResult.results.length);
-            
+
             // Dispatch semantic fragment events for each result
             toolResult.results.forEach((semanticResult: any, index: number) => {
               if (semanticResult.text && semanticResult.text.length > 10 && semanticResult.similarity > 0.6) {
@@ -406,7 +404,7 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
                   similarity: semanticResult.similarity,
                   page: semanticResult.page
                 });
-                
+
                 setTimeout(() => {
                   if (typeof window !== 'undefined') {
                     window.dispatchEvent(new CustomEvent('tutor-highlight-semantic-fragment', {
@@ -423,7 +421,7 @@ export function useRealtimeSession(callbacks: RealtimeSessionCallbacks = {}) {
                       }
                     }));
                   }
-                }, index * 100); // Quick highlighting
+                }, index * 100);
               }
             });
           }

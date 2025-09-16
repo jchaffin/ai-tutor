@@ -19,7 +19,7 @@ export async function GET(
     
     try {
       const fileBuffer = await readFile(filePath)
-      return new NextResponse(fileBuffer, {
+      return new NextResponse(new Uint8Array(fileBuffer), {
         headers: {
           'Content-Type': 'application/pdf',
           'Content-Disposition': `inline; filename="${filename}"`,

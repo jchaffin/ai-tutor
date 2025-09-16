@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
     const results = chunks.map(chunk => {
       const similarity = cosineSimilarity(queryVector, chunk.embedding as number[]);
       return {
-        text: chunk.text,
+        text: chunk.text,  // Return exact stored text
         page: chunk.page,
         similarity,
         startIndex: chunk.start,
@@ -81,9 +81,10 @@ export async function POST(request: NextRequest) {
         chunkId: chunk.id
       };
     })
-    .filter(result => result.similarity > 0.6) // Lower threshold for real-time
+    // Slightly lower threshold for more recall during live speech
+    .filter(result => result.similarity > 0.55)
     .sort((a, b) => b.similarity - a.similarity) // Sort by similarity
-    .slice(0, 5); // Limit to top 5 for real-time performance
+    .slice(0, 3); // Limit to top 3 for snappier, evolving highlights
 
     console.log(`🔍 Found ${results.length} semantic matches for "${query}"`);
 

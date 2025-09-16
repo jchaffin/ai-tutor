@@ -49,7 +49,7 @@ export function extractAuthorCandidates(text: string, title?: string): string[] 
   // Consider a small window after the title
   const windowLines = lines.slice(startIdx, startIdx + 10)
   // Join consecutive non-empty lines until a blank appears
-  let block: string[] = []
+  const block: string[] = []
   for (const l of windowLines) {
     if (!l) break
     // skip venue/footer style lines
@@ -61,7 +61,7 @@ export function extractAuthorCandidates(text: string, title?: string): string[] 
   const merged = block.join(' ')
 
   // Strip emails, affiliations markers, and footnote symbols
-  let cleaned = merged
+  const cleaned = merged
     .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, ' ')
     .replace(/\d+|\*|†|‡|§|¶|‖|‗|\^/g, ' ')
     .replace(/\s+/g, ' ')

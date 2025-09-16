@@ -44,7 +44,7 @@ export async function GET(
         }
         
         const fileBuffer = await readFile(filePath)
-        return new NextResponse(fileBuffer, {
+        return new NextResponse(fileBuffer as any, {
           headers: {
             'Content-Type': 'application/pdf',
             'Content-Disposition': `inline; filename="${document.filename}"`,

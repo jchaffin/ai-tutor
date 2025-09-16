@@ -6,7 +6,6 @@ import { useTranscript } from '@/contexts/TranscriptContext'
 import { useRealtimeSession } from '@/hooks/useRealtimeSession'
 import { useHandleSessionHistory } from '@/hooks/useHandleSessionHistory'
 import { createTutorAgent } from '@/lib/agents/tutorAgent'
-import { createCitationResearchAgent } from '@/lib/agents/citationAgent'
 import { SessionStatus, PDFAnnotation } from '@/types'
 import ReactMarkdown from "react-markdown"
 import { Button } from '@/components/ui/Button'
@@ -167,7 +166,34 @@ export default function ChatInterface({
     
     el.addEventListener('play', () => {
       console.log("🎵 Audio started playing");
+      try {
+        const wordsPerMinute = 165; // default speaking rate
+        const dwellMs = Math.max(600, Math.min(1400, Math.round(60000 / Math.max(120, Math.min(220, wordsPerMinute))) * 3));
+        window.dispatchEvent(new CustomEvent('tutor-audio-pace', { detail: { wpm: wordsPerMinute, dwellMs } }))
+        window.dispatchEvent(new CustomEvent('tutor-audio-tick', { detail: { t: el.currentTime || 0, rate: el.playbackRate || 1 } }))
+      } catch {}
     });
+
+    el.addEventListener('timeupdate', () => {
+      try {
+        window.dispatchEvent(new CustomEvent('tutor-audio-tick', { detail: { t: el.currentTime || 0, rate: el.playbackRate || 1 } }))
+      } catch {}
+    })
+
+    el.addEventListener('ratechange', () => {
+      try {
+        const baseWpm = 165
+        const wordsPerMinute = Math.max(120, Math.min(240, Math.round(baseWpm * (el.playbackRate || 1))))
+        const dwellMs = Math.max(500, Math.min(1600, Math.round(60000 / wordsPerMinute) * 3))
+        window.dispatchEvent(new CustomEvent('tutor-audio-pace', { detail: { wpm: wordsPerMinute, dwellMs, rate: el.playbackRate || 1 } }))
+      } catch {}
+    })
+
+    el.addEventListener('pause', () => {
+      try {
+        window.dispatchEvent(new CustomEvent('tutor-audio-pace', { detail: { paused: true } }))
+      } catch {}
+    })
     
     el.addEventListener('error', (e) => {
       console.error("🎵 Audio error:", e);
@@ -216,13 +242,27 @@ export default function ChatInterface({
 
   // Listen to tutor transcript deltas for real-time annotation (normalized)
   useEffect(() => {
+    const lastFullRef = { current: '' } as { current: string };
     const handleTutorTranscript = (event: any) => {
       const detail = event?.detail || {};
-      const transcript: string = detail.delta || detail.transcript || '';
+      const rawDelta: string = typeof detail.delta === 'string' ? detail.delta : '';
+      const full: string = typeof detail.transcript === 'string' ? detail.transcript : '';
+      let transcript: string = rawDelta;
+      if (!transcript && full) {
+        const prev = lastFullRef.current || '';
+        transcript = full.startsWith(prev) ? full.slice(prev.length) : full;
+        lastFullRef.current = full;
+      }
       if (!transcript || typeof transcript !== 'string') return;
 
       console.log('🎤 Tutor transcript delta:', transcript);
-
+      // Fire begin event when utterance starts
+      try {
+        if (!((window as any).__utteranceActive)) {
+          (window as any).__utteranceActive = true
+          window.dispatchEvent(new CustomEvent('tutor-utterance-begin'))
+        }
+      } catch {}
       // Accumulate buffer and trigger throttled semantic search updates tied to speech
       try {
         const trimmed = transcript.trim();
@@ -230,7 +270,7 @@ export default function ChatInterface({
           const needsSpace = speechBufferRef.current && !/\s$/.test(speechBufferRef.current || '');
           speechBufferRef.current = (speechBufferRef.current || '') + (needsSpace ? ' ' : '') + trimmed;
           const endsSentence = /[.!?]$/.test(trimmed);
-          if ((speechBufferRef.current || '').length >= 40 || endsSentence) {
+          if ((speechBufferRef.current || '').length >= 20 || endsSentence) {
             scheduleSemanticUpdate();
           }
         }
@@ -238,8 +278,14 @@ export default function ChatInterface({
         const isComplete = !!detail.isComplete || !!detail.isUtterance;
         if (isComplete) {
           const finalQ = (speechBufferRef.current || '').trim();
-          if (finalQ.length >= 20) runSemanticSearch(finalQ);
+          if (finalQ.length >= 8) runSemanticSearch(finalQ);
           speechBufferRef.current = '';
+          try {
+            (window as any).__utteranceActive = false
+            window.dispatchEvent(new CustomEvent('tutor-utterance-end'))
+          } catch {}
+          // Reset last-full tracker when an utterance ends
+          lastFullRef.current = '';
         }
       } catch (e) {
         console.warn('Semantic buffering failed:', e);
@@ -516,21 +562,25 @@ export default function ChatInterface({
     }
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (inputMessage.trim() && !isLoading) {
-      onSendMessage(inputMessage.trim())
+      const userQuery = inputMessage.trim()
+      // Clear previous highlights/overlays between user questions
+      try { window.dispatchEvent(new CustomEvent('pdf-clear-highlights')); } catch {}
+      onSendMessage(userQuery)
       // If voice session is connected, forward the text into the conversation and trigger response
       if (sessionStatus === 'CONNECTED') {
         try {
           // stop any ongoing assistant speech first
           try { interrupt() } catch {}
-          sendUserText(inputMessage.trim())
+          sendUserText(userQuery)
           sendEvent({ type: 'response.create' })
         } catch (err) {
           console.error('❌ Failed to send text to voice session:', err)
         }
       }
+      // Do not run semantic similarity on submit; lexical highlighting is handled by the agent/tools
       setInputMessage('')
     }
   }
@@ -570,14 +620,27 @@ export default function ChatInterface({
   const lastProcessedMsgIdRef = useRef<string | null>(null)
   const lastProcessedTranscriptIdRef = useRef<string | null>(null)
 
-  // Dynamic semantic-highlighting state for tutor speech
+  // Semantic-highlighting state used for user queries only
   const speechBufferRef = useRef<string>('')
   const semanticTimerRef = useRef<number | null>(null)
+  const semanticLastRunRef = useRef<number>(0)
+  const semanticDwellMsRef = useRef<number>(900)
+
+  useEffect(() => {
+    const onPace = (ev: any) => {
+      const dwell = Number(ev?.detail?.dwellMs)
+      if (isFinite(dwell) && dwell > 300 && dwell < 3000) {
+        semanticDwellMsRef.current = dwell
+      }
+    }
+    window.addEventListener('tutor-audio-pace', onPace as EventListener)
+    return () => window.removeEventListener('tutor-audio-pace', onPace as EventListener)
+  }, [])
 
   const runSemanticSearch = async (query: string) => {
     try {
       const q = (query || '').trim()
-      if (q.length < 20) return
+      if (q.length < 8) return
       const res = await fetch('/api/realtime/semantic-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -603,7 +666,7 @@ export default function ChatInterface({
       } catch {}
 
       // Accumulate highlights during an utterance; do NOT clear on every delta
-      const top = results.slice(0, 5)
+      const top = results.slice(0, 3)
       const stopwords = new Set(['the','and','for','with','this','that','from','are','was','were','been','have','has','had','into','onto','over','very','more','most','such','than','then','also','can','may','might','will','would','could'])
       const keywords = q
         .toLowerCase()
@@ -616,22 +679,56 @@ export default function ChatInterface({
         const raw = typeof r?.text === 'string' ? r.text : ''
         if (!raw) return
         const normalized = raw.replace(/\s+/g, ' ').trim()
-        // Prefer a longer snippet around a keyword to maximize perceived coverage
-        let best = normalized.slice(0, 260)
+        // Choose WHOLE SENTENCE that contains the strongest keyword
+        const sentences: Array<{ text: string; start: number; end: number }> = []
+        const rx = /[^.!?]+[.!?]+/g
+        let m: RegExpExecArray | null
+        while ((m = rx.exec(normalized)) !== null) {
+          sentences.push({ text: m[0].trim(), start: m.index, end: rx.lastIndex })
+        }
+        if (sentences.length === 0) {
+          sentences.push({ text: normalized, start: 0, end: normalized.length })
+        }
+        const lower = normalized.toLowerCase()
+        let chosen: { text: string; start: number; end: number } | null = null
         for (const kw of keywords) {
-          const idx = normalized.toLowerCase().indexOf(kw)
+          const idx = lower.indexOf(kw)
           if (idx >= 0) {
-            const start = Math.max(0, idx - 100)
-            const end = Math.min(normalized.length, idx + kw.length + 160)
-            best = normalized.slice(start, end)
-            break
+            chosen = sentences.find((s) => s.start <= idx && idx < s.end) || null
+            if (chosen) break
           }
         }
-        // Avoid cutting in the middle of words
-        best = best.replace(/^\S+\s/, '').replace(/\s\S+$/, '')
-        // Dispatch concise, matchable fragment
+        if (!chosen) chosen = sentences[0]
+        let best = chosen.text
+        // If sentence is very short, append the next sentence for better context
+        const chosenIndex = sentences.findIndex((s) => s.start === chosen!.start && s.end === chosen!.end)
+        if (best.length < 60 && chosenIndex >= 0 && chosenIndex + 1 < sentences.length) {
+          best = `${best} ${sentences[chosenIndex + 1].text}`.trim()
+        }
+
+        // Dedup guard: avoid dispatching identical fragment for same page within 800ms
+        try {
+          const key = `${r.page || 0}|${best.toLowerCase()}`
+          ;(window as any).__recentSem = (window as any).__recentSem || {}
+          const last = Number((window as any).__recentSem[key] || 0)
+          const now = Date.now()
+          if (now - last < 800) {
+            return
+          }
+          ;(window as any).__recentSem[key] = now
+        } catch {}
+
+        // Dispatch sentence-level fragment with metadata for dedupe/anchoring
         window.dispatchEvent(new CustomEvent('tutor-highlight-semantic-fragment', {
-          detail: { text: best, page: r.page, similarity: r.similarity, query: q },
+          detail: { 
+            text: best,
+            page: r.page,
+            similarity: r.similarity,
+            query: q,
+            chunkId: r.chunkId,
+            startIndex: r.startIndex,
+            endIndex: r.endIndex
+          },
         }))
       })
     } catch (e) {
@@ -640,11 +737,28 @@ export default function ChatInterface({
   }
 
   const scheduleSemanticUpdate = () => {
+    const q = (speechBufferRef.current || '').trim()
+    if (q.length < 6) return
+
+    const now = Date.now()
+    const throttleMs = Math.max(350, Math.floor(semanticDwellMsRef.current * 0.9))
+    const trailingMs = Math.max(200, Math.floor(semanticDwellMsRef.current * 0.45))
+
+    // Leading-edge throttle: if enough time elapsed, fire immediately
+    if (now - semanticLastRunRef.current >= throttleMs) {
+      semanticLastRunRef.current = now
+      try { if (semanticTimerRef.current) window.clearTimeout(semanticTimerRef.current) } catch {}
+      runSemanticSearch(q)
+      return
+    }
+
+    // Trailing call to ensure updates while continuous speech continues
     try { if (semanticTimerRef.current) window.clearTimeout(semanticTimerRef.current) } catch {}
     semanticTimerRef.current = window.setTimeout(() => {
-      const q = (speechBufferRef.current || '').trim()
-      if (q.length >= 20) runSemanticSearch(q)
-    }, 600)
+      semanticLastRunRef.current = Date.now()
+      const latest = (speechBufferRef.current || '').trim()
+      if (latest.length >= 8) runSemanticSearch(latest)
+    }, trailingMs)
   }
 
   const wordsToNumber = (word: string): number | null => {
@@ -893,75 +1007,50 @@ export default function ChatInterface({
                   .map((item) => {
                     const isUser = item.role === "user"
                     return (
-                      <div key={item.itemId} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-                        <div className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                          isUser 
-                            ? "bg-[var(--secondary)] text-white" 
-                            : "bg-gray-100 text-gray-600"
-                        }`}>
-                          <div className="text-sm">{item.title}</div>
-                          <div className={`text-xs mt-1 ${
-                            isUser ? 'text-gray-300' : 'text-gray-500'
-                          }`}>{item.timestamp}</div>
+                      <div key={item.itemId} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+                        <div
+                          className={`max-w-[80%] rounded-2xl px-4 py-2 ${
+                            isUser
+                              ? 'bg-[var(--secondary)] text-white'
+                              : 'bg-gray-100 text-gray-600'
+                          }`}
+                        >
+                          <div className="text-sm">{(item as any).title}</div>
+                          <div className={`text-xs mt-1 ${isUser ? 'text-gray-300' : 'text-gray-500'}`}>
+                            {formatTime((item as any).createdAtMs ? new Date((item as any).createdAtMs) : new Date())}
+                          </div>
                         </div>
                       </div>
                     )
                   })}
               </>
             )}
-            
-            {isLoading && (
-              <div className="flex justify-start">
-                <div className="bg-gray-100 rounded-lg px-4 py-2">
-                  <div className="text-sm">Loading...</div>
-                </div>
-              </div>
-            )}
-            
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Scroll to Bottom Button */}
-          {showScrollToBottom && (
-            <div className="absolute bottom-36 right-4 z-20">
-              <button
-                onClick={scrollToBottom}
-                className="bg-indigo-600 text-white rounded-full p-3 shadow-lg hover:bg-indigo-700 transition-colors"
-                title="Scroll to latest messages"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                </svg>
-              </button>
+          {/* Composer */}
+          <div className="w-full flex-shrink-0" style={{ position: 'fixed', bottom: 0, ...fixedInputStyle }}>
+            <div className="bg-white border-t p-3">
+              <form onSubmit={handleSubmit} className="flex items-end gap-2">
+                <textarea
+                  ref={inputRef}
+                  value={inputMessage}
+                  onChange={(e) => setInputMessage(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  rows={1}
+                  placeholder="Ask about the PDF..."
+                  className="flex-1 border rounded-lg p-2 resize-none focus:outline-none"
+                />
+                <Button type="submit" disabled={isLoading || !inputMessage.trim()} variant="default" size="lg" className="rounded-full">
+                  <Send size={16} />
+                  Send
+                </Button>
+              </form>
             </div>
-          )}
+          </div>
         </div>
       </div>
-
-      {/* Input Form - FIXED, CONSTRAINED TO CHAT PANE - Only show when connected */}
-      {sessionStatus === 'CONNECTED' && (
-        <div className="chat-input fixed bottom-0 bg-gray-50 border-t p-4 z-30" style={fixedInputStyle}>
-          <form onSubmit={handleSubmit} className="flex items-end gap-2">
-            <textarea
-              ref={inputRef}
-              value={inputMessage}
-              onChange={(e) => setInputMessage(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask a question about your PDF..."
-              className="flex-1 resize-none rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              rows={1}
-              disabled={isLoading}
-            />
-            <Button
-              type="submit"
-              disabled={!inputMessage.trim() || isLoading}
-              variant="default"
-            >
-              Send
-            </Button>
-          </form>
-        </div>
-      )}
     </div>
   )
 }
+
