@@ -383,6 +383,85 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     return new RegExp(pattern, 'i');
   };
 
+  // Only allow flexible regex fallback for simple phrases (letters, numbers, spaces, hyphens)
+  const isSafeForRegexFallback = (s: string): boolean => {
+    try {
+      return /^[\p{L}\p{N}\s-]+$/u.test(s) && s.trim().length >= 3;
+    } catch {
+      return false;
+    }
+  };
+
+  // Highlight a section when the query looks like a numeric heading (e.g., "3.2" or "2.1.4")
+  const highlightSectionByHeading = (heading: string): boolean => {
+    try {
+      const layers = Array.from(document.querySelectorAll('[data-testid^="core__page-layer-" ]')) as HTMLElement[];
+      if (!layers.length) return false;
+      const escapedHeading = escapeRegExp(heading);
+      const headingRegex = new RegExp('^\\s*' + escapedHeading + '(?:\\.|\\s|$)');
+
+      for (const layer of layers) {
+        const layerRect = layer.getBoundingClientRect();
+        const textEls = Array.from(layer.querySelectorAll('span, div')) as HTMLElement[];
+        const items = textEls
+          .filter((el) => (el.textContent || '').trim().length > 0)
+          .map((el) => {
+            const r = el.getBoundingClientRect();
+            return {
+              el,
+              text: normalizedPhrase(el.textContent || ''),
+              left: r.left - layerRect.left,
+              top: r.top - layerRect.top,
+              right: r.right - layerRect.left,
+              bottom: r.bottom - layerRect.top,
+            };
+          })
+          .sort((a, b) => a.top - b.top || a.left - b.left);
+
+        const idx = items.findIndex((it) => headingRegex.test(it.text));
+        if (idx === -1) continue;
+
+        const anchor = items[idx];
+        const anchorLeft = anchor.left;
+        const colTolerance = 140; // px band to stay within the same column
+        const inSameColumn = (x: number) => Math.abs(x - anchorLeft) <= colTolerance;
+        let minX = anchor.left;
+        let maxX = anchor.right;
+        let topY = anchor.top;
+        let bottomY = anchor.bottom;
+
+        // Grow downward until the next heading-like line (same column), or end of page
+        for (let i = idx + 1; i < items.length; i++) {
+          const it = items[i];
+          // Stop when we detect the next numeric heading near the same column
+          if (/^\s*\d+(?:\.\d+)+(?:\.|\s|$)/.test(it.text) && inSameColumn(it.left)) {
+            break;
+          }
+          if (inSameColumn(it.left)) {
+            minX = Math.min(minX, it.left);
+            maxX = Math.max(maxX, it.right);
+            bottomY = Math.max(bottomY, it.bottom);
+          }
+        }
+
+        // Draw one consolidated overlay for the section on this page
+        const m = (layer.getAttribute('data-testid') || '').match(/core__page-layer-(\d+)/);
+        const pageIndex = m ? Math.max(0, parseInt(m[1], 10) || 0) : 0;
+        clearHighlightOverlays();
+        drawHighlightOnPage(pageIndex, {
+          left: Math.max(0, minX),
+          top: Math.max(0, topY),
+          width: Math.max(1, maxX - minX),
+          height: Math.max(1, bottomY - topY),
+        });
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
   const runSearch = async (value: string) => {
     const phrase = normalizedPhrase(value);
     if (!phrase) {
@@ -390,11 +469,19 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       setMatchInfo({ current: 0, total: 0 });
       return;
     }
+    // If the phrase looks like a numeric section heading, try section-highlighting first
+    if (/^\d+(?:\.\d+)+$/.test(phrase)) {
+      const ok = highlightSectionByHeading(phrase);
+      if (ok) {
+        setMatchInfo({ current: 1, total: 1 });
+        return;
+      }
+    }
     try {
       // Attempt 1: direct phrase
       let matches = await searchPluginInstanceRef.current.highlight([{ keyword: phrase, matchCase: false }]);
-      if (matches.length === 0) {
-        // Attempt 2: flexible regex that tolerates whitespace/hyphenation/soft hyphens
+      // Attempt 2: flexible regex only for simple alphanumeric phrases
+      if (matches.length === 0 && isSafeForRegexFallback(phrase)) {
         const regex = buildFlexibleRegexFromPhrase(phrase);
         matches = await searchPluginInstanceRef.current.highlight(regex as any);
       }

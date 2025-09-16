@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { unlink } from 'fs/promises'
+import { join } from 'path'
 
 export async function GET(
   request: NextRequest,
@@ -89,6 +91,15 @@ export async function DELETE(
 
     const doc = await prisma.document.findFirst({ where: { id, userId: session.user.id } })
     if (!doc) return NextResponse.json({ error: 'Document not found' }, { status: 404 })
+
+    // Best-effort: delete local file if stored under /uploads
+    if (doc.filepath && doc.filepath.startsWith('/uploads/')) {
+      try {
+        const filename = doc.filepath.replace('/uploads/', '')
+        const filePath = join(process.cwd(), 'uploads', filename)
+        await unlink(filePath)
+      } catch {}
+    }
 
     await prisma.document.delete({ where: { id } })
     return NextResponse.json({ success: true })
