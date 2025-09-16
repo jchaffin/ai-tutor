@@ -427,7 +427,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         const inSameColumn = (x: number) => Math.abs(x - anchorLeft) <= colTolerance;
         let minX = anchor.left;
         let maxX = anchor.right;
-        let topY = anchor.top;
+        const topY = anchor.top;
         let bottomY = anchor.bottom;
 
         // Grow downward until the next heading-like line (same column), or end of page
